@@ -33,7 +33,7 @@ public:
 	void setBoardIndex(int bi); // set the board index for the current acdc
 
 	//----------parse function for data stream 
-	int parseDataFromBuffer(vector<unsigned short> buffer); //parses only the psec data component of the ACDC buffer
+	int parseDataFromBuffer(const vector<uint64_t>& buffer); //parses only the psec data component of the ACDC buffer
 
 	//----------write data to file
 	void writeErrorLog(string errorMsg); //write errorlog with timestamps

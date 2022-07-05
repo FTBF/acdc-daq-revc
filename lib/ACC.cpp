@@ -26,36 +26,14 @@ void ACC::got_signal(int){quitacc.store(true);}
 /*--------------------------------Constructor/Deconstructor---------------------------*/
 
 /*ID:5 Constructor*/
-ACC::ACC()
+ACC::ACC() : eth("192.168.46.108", "2007"), eth_burst("192.168.46.108", "2008")
 {
 	bool clearCheck;
-	usb = new stdUSB();
-	if(!usb->isOpen())
-	{
-		writeErrorLog("Usb was unable to connect to ACC");
-		delete usb;
-		exit(EXIT_FAILURE);
-	}
-
-	clearCheck = emptyUsbLine();
-	if(clearCheck==false)
-	{
-		writeErrorLog("Failed to clear USB line on constructor!");
-	}
 }
 
 /*ID:6 Destructor*/
 ACC::~ACC()
 {
-	bool clearCheck;
-	cout << "Calling acc destructor" << endl;
-	clearAcdcs();
-	clearCheck = emptyUsbLine();
-	if(clearCheck==false)
-	{
-		writeErrorLog("Failed to clear USB line on destructor!");
-	}
-	delete usb;
 }
 
 
@@ -65,21 +43,13 @@ ACC::~ACC()
 /*ID:9 Create ACDC class instances for each connected ACDC board*/
 int ACC::createAcdcs()
 {
-	//To prepare clear the USB line just in case
-	bool clearCheck = emptyUsbLine();
-	if(clearCheck==false)
-	{
-		writeErrorLog("Failed to clear USB line before creating ACDCs!");
-	}
-
 	//Check for connected ACDC boards
 	int retval = whichAcdcsConnected(); 
 	if(retval==-1)
 	{
 		std::cout << "Trying to reset ACDC boards" << std::endl;
-		unsigned int command = 0xFFFF0000;
-		usb->sendData(command);
-		usleep(1000000);
+		eth.send(0x100, 0xFFFF0000);
+		usleep(10000);
 		int retval = whichAcdcsConnected();
 		if(retval==-1)
 		{
@@ -124,36 +94,15 @@ int ACC::whichAcdcsConnected()
 	//New sequence to ask the ACC to reply with the number of boards connected 
 	//Disables the PSEC4 frame data transfer for this sequence. Has to be set to HIGH later again
 	enableTransfer(0); 
-	usleep(100000);
+	usleep(1000);
 
 	//Resets the RX buffer on all 8 ACDC boards
-	command = 0x000200FF; 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-	//Sends a reset for detected ACDC boards to the ACC
-	command = 0x00030000; 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-	//Request a 32 word ACDC ID frame containing all important infomations
-	command = 0xFFD00000; 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-
-	usleep(100000);
+	eth.send(0x0020, 0xff);
 
 	//Request and read the ACC info buffer and pass it the the corresponding vector
-	command=0x00200000;
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-	lastAccBuffer = usb->safeReadData(SAFE_BUFFERSIZE);
+        uint64_t accInfo = eth.recieve(0x1011);
 
-	//Check if buffer size is 32 words
-	if(lastAccBuffer.size() != ACCFRAME) 
-	{
-		string err_msg = "Something wrong with ACC buffer, size: ";  
-		err_msg += to_string(lastAccBuffer.size());
-		writeErrorLog(err_msg);
-		return 0;
-	}
-
-
-	unsigned short alignment_packet = lastAccBuffer.at(7);	
+	unsigned short alignment_packet = ~((unsigned short)accInfo);
 	for(int i = 0; i < MAX_NUM_BOARDS; i++)
 	{	
 		//both (1<<i) and (1<<i+8) should be true if aligned & synced respectively
@@ -187,11 +136,66 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 	retval = createAcdcs();
 	if(retval==0)
 	{
-		writeErrorLog("ACDCs could not be created");
+            writeErrorLog("ACDCs could not be created");
 	}
+
+        //check ACDC PLL Settings
+        // REVIEW ERRORS AND MESSAGES 
+        for(int bi: alignedAcdcIndices)
+	{
+            // read ACD info frame 
+            eth.send(0x100, 0x00D00000 | (1 << (bi + 24)));
+
+            std::vector<uint64_t> acdcInfo = eth.recieve_many(0x1200 + bi, 32, EthernetInterface::NO_ADDR_INC);
+            if((acdcInfo[0] & 0xffff) != 0x1234)
+            {
+                std::cout << "ACDC" << bi << " has invalid info frame" << std::endl;
+            }
+
+            if(!(acdcInfo[6] & 0x4)) std::cout << "ACDC" << bi << " has unlocked ACC pll" << std::endl;
+            if(!(acdcInfo[6] & 0x2)) std::cout << "ACDC" << bi << " has unlocked serial pll" << std::endl;
+            if(!(acdcInfo[6] & 0x1)) std::cout << "ACDC" << bi << " has unlocked white rabbit pll" << std::endl;
+
+            if(!(acdcInfo[6] & 0x8))
+            {
+                // external PLL must be unconfigured, attempt to configure them 
+                configJCPLL();
+
+                // reset the ACDC after configuring JCPLL
+                resetACDC();
+                usleep(5000);
+
+                // check PLL bit again
+                // read ACD info frame 
+                eth.send(0x100, 0x00D00000 | (1 << (bi + 24)));
+
+                acdcInfo = eth.recieve_many(0x1200 + bi, 32, EthernetInterface::NO_ADDR_INC);
+                if((acdcInfo[0] & 0xffff) != 0x1234)
+                {
+                    std::cout << "ACDC" << bi << " has invalid info frame" << std::endl;
+                }
+                
+                if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(bi) + " has unlocked sys pll");
+            }
+	}
+
+
+	//disable all triggers
+	//ACC trigger
+        for(unsigned int i = 0; i < 8; ++i) eth.send(0x0030+i, 0);
+	//ACDC trigger
+	command = 0xffB00000;
+	eth.send(0x100, command);
 
 	// Toogels the calibration mode on if requested
 	toggleCal(calibMode, 0x7FFF, boardMask);
+
+	//train manchester links
+	eth.send(0x0060, 0);
+	usleep(250);
+
+        //scan hs link phases and pick optimal phase
+        scanLinkPhase(boardMask);
 
 	// Set trigger conditions
 	switch(trigMode)
@@ -202,91 +206,30 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 		case 1: //Software trigger
 			setSoftwareTrigger(boardMask);
 			break;
-		case 2: //SMA trigger ACC 
+		case 2: //Self trigger
 			setHardwareTrigSrc(trigMode,boardMask);
-			command = 0x00310000;
-			command = command | ACC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			break;
-		case 3: //SMA trigger ACDC 
+			break;//goto selfsetup;
+		case 3: //Self trigger with validation 
 			setHardwareTrigSrc(trigMode,boardMask);
+                        //timeout 
 			command = 0x00B20000;
-			command = (command | (boardMask << 24)) | ACDC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+			command = (command | (boardMask << 24)) | 40;
+			eth.send(0x100, command);
 			break;
-		case 4: //Self trigger
+                case 4:
 			setHardwareTrigSrc(trigMode,boardMask);
-			goto selfsetup;
-
-			break;				
+			break;
 		case 5: //Self trigger with SMA validation on ACC
  			setHardwareTrigSrc(trigMode,boardMask);
-			command = 0x00310000;
-			command = command | ACC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+                        eth.send(0x0038, ACC_sign);
 
-			command = 0x00320000;
-			command = command | validation_start;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00330000;
-			command = command | validation_window;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00350000;
-			command = command | PPSBeamMultiplexer;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+                        eth.send(0x0039, validation_start);
+			
+                        eth.send(0x003a, validation_window);
+			
+                        eth.send(0x003b, PPSBeamMultiplexer);
+			
 			goto selfsetup;
-			break;
-		case 6: //Self trigger with SMA validation on ACDC
-			setHardwareTrigSrc(trigMode,boardMask);
-			command = 0x00B20000;
-			command = (command | (boardMask << 24)) | ACDC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-
-			command = 0x00320000;
-			command = command | validation_start;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00330000;
-			command = command | validation_window;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			goto selfsetup;
-			break;
-		case 7:
-			setHardwareTrigSrc(trigMode,boardMask);
-			command = 0x00320000;
-			command = command | validation_start;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00330000;
-			command = command | validation_window;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00B20000;
-			command = (command | (boardMask << 24)) | ACDC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00310000;
-			command = command | ACC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			break;
-		case 8:
-			setHardwareTrigSrc(trigMode,boardMask);
-			command = 0x00320000;
-			command = command | validation_start;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			printf("st: 0x%08x\n",command);
-			command = 0x00330000;
-			command = command | validation_window;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			printf("win: 0x%08x\n",command);
-			command = 0x00B20000;
-			command = (command | (boardMask << 24)) | ACDC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00310000;
-			command = command | ACC_sign;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00350000;
-			command = command | PPSBeamMultiplexer;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			break;
-		case 9: 
-			setHardwareTrigSrc(trigMode,boardMask);
 			break;
 		default: // ERROR case
 			writeErrorLog("Trigger source Error");	
@@ -311,27 +254,38 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 			{		
 				command = 0x00B10000;
 				command = (command | (boardMask << 24)) | CHIPMASK[i] | SELF_psec_channel_mask[i]; printf("Mask: 0x%08x\n",command);
-				usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+				eth.send(0x100, command);
 			}
 			
 			command = 0x00B16000;
 			command = (command | (boardMask << 24)) | SELF_sign;
-			usbcheck=usb->sendData(command);	if(usbcheck==false){writeErrorLog("Send Error");}			
+                        eth.send(0x100, command);
 			command = 0x00B15000;
 			command = (command | (boardMask << 24)) | SELF_number_channel_coincidence;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+                        eth.send(0x100, command);
 			command = 0x00B18000;
 			command = (command | (boardMask << 24)) | SELF_coincidence_onoff;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-			command = 0x00A60000;
-			command = (command | (boardMask << 24)) | (0x1F << 12) | SELF_threshold;
-			usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+                        eth.send(0x100, command);
+                        // MUST STILL INPLEMENT INDIVIDUAL THRESHOLDS!!!!!!!!
+                        for(int iChip = 0; iChip < 5; ++iChip)
+                        {
+                            for(int iChan = 0; iChan < 6; ++iChan)
+                            {
+                                command = 0x00A60000;
+                                command = ((command + (iChan << 16)) | (boardMask << 24)) | (iChip << 12) | SELF_threshold;
+                                eth.send(0x100, command);
+                            }
+                        }
 	}
 
-	command = 0x00340000;
-	command = command | PPSRatio;
-	printf("cmd: 0x%08x\n", command); 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+        //flush data FIFOs
+	dumpData(boardMask);
+
+	//Enables the transfer of data from ACDC to ACC
+	eth_burst.setBurstTarget();
+	eth.setBurstMode(true);
+	enableTransfer(3); 
+        
 	return 0;
 }
 
@@ -342,11 +296,13 @@ void ACC::setSoftwareTrigger(unsigned int boardMask)
 
 	//Set the trigger
 	command = 0x00B00001; //Sets the trigger of all ACDC boards to 1 = Software trigger
-	command = (command | (boardMask << 24)); 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-	command = 0x00300000; //Sets all ACDC boards to software trigger on the ACC 
-	command = (command | (boardMask << 4)) | 1; 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
+	command = (command | (boardMask << 24));
+        eth.send(0x100, command);
+        for(unsigned int i = 0; i < 8; ++i)
+        {
+            if((boardMask >> i) & 1) eth.send(0x0030+i, 1);
+            else                     eth.send(0x0030+i, 0);
+        }
 }
 
 /*ID 21: Set up the hardware trigger*/
@@ -359,14 +315,47 @@ void ACC::setHardwareTrigSrc(int src, unsigned int boardMask)
 		writeErrorLog(err_msg);
 	}
 
+        int ACCtrigMode = 0;
+        int ACDCtrigMode = 0;
+        switch(src)
+        {
+        case 0:
+            ACCtrigMode = 0;
+            ACDCtrigMode = 0;
+            break;
+        case 1:
+            ACCtrigMode = 1;
+            ACDCtrigMode = 1;
+            break;
+        case 2:
+            ACCtrigMode = 0;
+            ACDCtrigMode = 2;
+            break;
+        case 3:
+            ACCtrigMode = 1;
+            ACDCtrigMode = 3;
+            break;
+        case 4:
+            ACCtrigMode = 2;
+            ACDCtrigMode = 1;
+            break;
+        default:
+            ACCtrigMode = 0;
+            ACDCtrigMode = 0;
+            break;
+        
+        }
+
 	//ACC hardware trigger
-	unsigned int command = 0x00300000;
-	command = (command | (boardMask << 4)) | (unsigned short)src;
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
+        for(unsigned int i = 0; i < 8; ++i)
+        {
+            if((boardMask >> i) & 1) eth.send(0x0030+i, 2);
+            else                     eth.send(0x0030+i, 0);
+        }
 	//ACDC hardware trigger
-	command = 0x00B00000;
-	command = (command | (boardMask << 24)) | (unsigned short)src;
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
+	unsigned int command = 0x00B00000;
+	command = (command | (boardMask << 24)) | (unsigned short)ACDCtrigMode;
+	eth.send(0x100, command);
 }
 
 /*ID 20: Switch for the calibration input on the ACC*/
@@ -384,7 +373,7 @@ void ACC::toggleCal(int onoff, unsigned int channelmask, unsigned int boardMask)
 	{
 		command = (command | (boardMask << 24));
 	}
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
+        eth.send(0x100, command);
 }
 
 
@@ -407,48 +396,26 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 	ofstream dataofs;
 
 	//Enables the transfer of data from ACDC to ACC
-   	enableTransfer(1);
+   	//enableTransfer(1);
+        //eth_burst.setBurstTarget();
+        //eth.setBurstMode(true);
 
+        
 	std::cout << "Start looking for trigger conditions" << std::endl;
 	while(true)
 	{
 		boardsReadyForRead.clear();
 		readoutSize.clear();
-		//Request the ACC info frame to check buffers
-		command = 0x00200000;
-		usbcheck=usb->sendData(command);
-		if(usbcheck==false)
-		{
-			writeErrorLog("Send Error");
-			clearCheck = emptyUsbLine();
-			if(clearCheck==false)
-			{
-				writeErrorLog("After failed send, emptying the USB lines failed as well");
-			}
-		}
-		
-		lastAccBuffer = usb->safeReadData(ACCFRAME);
-		
-		if(lastAccBuffer.size()==0)
-		{
-			std::cout << "ACCFRAME came up with " << lastAccBuffer.size() << std::endl;
-			continue;
-		}
-
+		//Request the ACC info frame to check data FIFOs
+                std::vector<uint64_t> fifoOcc = eth.recieve_many(0x1130, 8);
+                
 		for(int k=0; k<MAX_NUM_BOARDS; k++)
 		{
-			if(lastAccBuffer.at(14) & (1 << k))
-			{
-				if(lastAccBuffer.at(16+k)==PSECFRAME)
-				{
-					boardsReadyForRead.push_back(k);
-					readoutSize[k] = PSECFRAME;
-				}else if(lastAccBuffer.at(16+k)==PPSFRAME)
-				{
-					boardsReadyForRead.push_back(k);
-					readoutSize[k] = PPSFRAME;
-				}
-			}
+                      if(fifoOcc[k]>=PSECFRAME)
+                      {
+                          boardsReadyForRead.push_back(k);
+                          readoutSize[k] = PSECFRAME;
+                      }
 		}
 
 		//old trigger
@@ -456,36 +423,6 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 		{
 			break;
 		}
-
-		/*new trigger
-		std::sort(boardsReadyForRead.begin(), boardsReadyForRead.end());
-		bool control = false;
-		if(boardsReadyForRead.size()%2==0)
-		{
-			for(int m=0; m<boardsReadyForRead.size(); m+=2)
-			{
-				if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={0,1})
-				{
-					control = true;
-				}else if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={2,3})
-				{
-					control = true;
-				}else if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={4,5})
-				{
-					control = true;
-				}else if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={6,7})
-				{
-					control = true;
-				}else
-				{
-					control = false;
-				}
-			}
-			if(control==true)
-			{
-				break;
-			}
-		}*/
 
 		maxCounter++;
 		if(maxCounter>5000)
@@ -499,24 +436,20 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 	{
 		std::cout << "Start reading board " << bi << std::endl;
 		//base command for set readmode and which board bi to read
-		unsigned int command = 0x00210000; 
-		command = command | (unsigned int)(bi); 
-		usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+                eth.send(0x22, bi);
 
-		//Tranfser the data to a receive vector
-		vector<unsigned short> acdc_buffer = usb->safeReadData(readoutSize[bi]);
+                std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
 
 		//Handles buffers =/= 7795 words
-		if((int)acdc_buffer.size() != readoutSize[bi])
+		if(acdc_data.size() != 1541)
 		{
 			string err_msg = "Couldn't read ";
-			err_msg += to_string(readoutSize[bi]);
+			err_msg += to_string(1540);
 			err_msg += " words as expected! Tryingto fix it! Size was: ";
-			err_msg += to_string(acdc_buffer.size());
+			err_msg += to_string(acdc_data.size());
 			writeErrorLog(err_msg);
 			return 1;
 		}
-
 		
 		//save this buffer a private member of ACDC
 		//by looping through our acdc vector
@@ -530,41 +463,42 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 				//If raw data is requested save and return 0
 				if(raw==true)
 				{
-					vbuffer = acdc_buffer;
+                                    //vbuffer = acdc_data;
 					string rawfn = outfilename + "Raw_" + timestamp + "_b" + to_string(bi) + ".txt";
-					writeRawDataToFile(acdc_buffer, rawfn);
+					writeRawDataToFile(acdc_data, rawfn);
 					break;
-				}else
+				}
+                                else
 				{
-					retval = a->parseDataFromBuffer(acdc_buffer); 
-					corruptBuffer = meta.parseBuffer(acdc_buffer);
-					if(corruptBuffer)
-					{
-						writeErrorLog("Metadata error not parsed correctly");
-						return 1;
-					}
-					meta.checkAndInsert("Board", bi);
-					map_meta[bi] = meta.getMetadata();
-					if(retval !=0)
-					{
-						string err_msg = "Corrupt buffer caught at PSEC data level (2)";
-						if(retval == 3)
-						{
-							err_msg += "Because of the Metadata buffer";
-						}
-						writeErrorLog(err_msg);
-						corruptBuffer = true;
-					}
-
-					if(corruptBuffer)
-					{
-						string err_msg = "got a corrupt buffer with retval ";
-						err_msg += to_string(retval);
-						writeErrorLog(err_msg);
-						return 1;
-					}
-	
-					map_data[bi] = a->returnData();
+					retval = a->parseDataFromBuffer(acdc_data); 
+					//corruptBuffer = meta.parseBuffer(acdc_buffer);
+					//if(corruptBuffer)
+					//{
+					//	writeErrorLog("Metadata error not parsed correctly");
+					//	return 1;
+					//}
+//					meta.checkAndInsert("Board", bi);
+//					map_meta[bi] = meta.getMetadata();
+//					if(retval !=0)
+//					{
+//						string err_msg = "Corrupt buffer caught at PSEC data level (2)";
+//						if(retval == 3)
+//						{
+//							err_msg += "Because of the Metadata buffer";
+//						}
+//						writeErrorLog(err_msg);
+//						corruptBuffer = true;
+//					}
+//
+//					if(corruptBuffer)
+//					{
+//						string err_msg = "got a corrupt buffer with retval ";
+//						err_msg += to_string(retval);
+//						writeErrorLog(err_msg);
+//						return 1;
+//					}
+//	
+//					map_data[bi] = a->returnData();
 				}
 			}
 		}
@@ -578,242 +512,196 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 		writePsecData(dataofs, boardsReadyForRead);
 	}
 
+        //eth.setBurstMode(false);
+
 	return 0;
 }
 
 /*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
 int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
 {
-	bool corruptBuffer;
-	vector<int> boardsReadyForRead;
-	map<int,int> readoutSize;
-	unsigned int command; 
-	bool clearCheck;
+    bool corruptBuffer;
+    vector<int> boardsReadyForRead;
+    map<int,int> readoutSize;
+    unsigned int command; 
+    bool clearCheck;
 
-	//filename logistics
-	string outfilename = "./Results/";
-	string datafn;
-	ofstream dataofs;
+    //filename logistics
+    string outfilename = "./Results/";
+    string datafn;
+    ofstream dataofs;
 
-	//this function is simply readAcdcBuffers
-	//if the trigMode is software
-	//if(trigMode == 1)
-	//{
-	//	int retval = readAcdcBuffers(raw, timestamp);
-	//	return retval;
-	//}
+    //this function is simply readAcdcBuffers
+    //if the trigMode is software
+    //if(trigMode == 1)
+    //{
+    //      int retval = readAcdcBuffers(raw, timestamp);
+    //      return retval;
+    //}
 
-	//setup a sigint capturer to safely
-	//reset the boards if a ctrl-c signal is found
-	struct sigaction sa;
-	memset( &sa, 0, sizeof(sa) );
-	sa.sa_handler = got_signal;
-	sigfillset(&sa.sa_mask);
-	sigaction(SIGINT,&sa,NULL);
+    //setup a sigint capturer to safely
+    //reset the boards if a ctrl-c signal is found
+    struct sigaction sa;
+    memset( &sa, 0, sizeof(sa) );
+    sa.sa_handler = got_signal;
+    sigfillset(&sa.sa_mask);
+    sigaction(SIGINT,&sa,NULL);
 
-	//Enables the transfer of data from ACDC to ACC
-   	enableTransfer(1); 
-  	
-	//duration variables
-	auto start = chrono::steady_clock::now(); //start of the current event listening. 
-	auto now = chrono::steady_clock::now(); //just for initialization 
-	auto printDuration = chrono::seconds(2); //prints as it loops and listens
-	auto lastPrint = chrono::steady_clock::now();
-	auto timeoutDuration = chrono::seconds(20); // will exit and reinitialize
+    //duration variables
+    auto start = chrono::steady_clock::now(); //start of the current event listening. 
+    auto now = chrono::steady_clock::now(); //just for initialization 
+    auto printDuration = chrono::seconds(2); //prints as it loops and listens
+    auto lastPrint = chrono::steady_clock::now();
+    auto timeoutDuration = chrono::seconds(20); // will exit and reinitialize
 
-	while(true)
-	{ 
-		//Clear the boards read vector
-		boardsReadyForRead.clear(); 
-		readoutSize.clear();
-		
-		//Time the listen fuction
-		now = chrono::steady_clock::now();
-		if(chrono::duration_cast<chrono::seconds>(now - lastPrint) > printDuration)
-		{	
-			string err_msg = "Have been waiting for a trigger for ";
-			err_msg += to_string(chrono::duration_cast<chrono::seconds>(now - start).count());
-			err_msg += " seconds";
-			writeErrorLog(err_msg);
-			for(int i=0; i<MAX_NUM_BOARDS; i++)
-			{
-				string err_msg = "Buffer for board ";
-				err_msg += to_string(i);
-				err_msg += " has ";
-				err_msg += to_string(lastAccBuffer.at(16+i));
-				err_msg += " words";
-				writeErrorLog(err_msg);
-			}
-			lastPrint = chrono::steady_clock::now();
-		}
-		if(chrono::duration_cast<chrono::seconds>(now - start) > timeoutDuration)
-		{
-			return 2;
-		}
+    //Request the ACC info frame to check buffers
+    while(true)
+    {
+        //Clear the boards read vector
+        boardsReadyForRead.clear(); 
+        readoutSize.clear();
 
-		//If sigint happens, return value of 3
-		if(quitacc.load())
-		{
-			return 3;
-		}
+        std::vector<uint64_t> fifoOcc = eth.recieve_many(0x1130, 8);
 
-		//Request the ACC info frame to check buffers
-		command = 0x00200000;
-		usbcheck=usb->sendData(command);
-		if(usbcheck==false)
-		{
-			writeErrorLog("Send Error");
-			clearCheck = emptyUsbLine();
-			if(clearCheck==false)
-			{
-				writeErrorLog("After failed send, emptying the USB lines failed as well");
-			}
-		}
-		
-		lastAccBuffer = usb->safeReadData(ACCFRAME);
-		
-		if(lastAccBuffer.size()==0)
-		{
-			std::cout << "ACCFRAME came up with " << lastAccBuffer.size() << std::endl;
-			continue;
-		}
+        //Time the listen fuction
+        now = chrono::steady_clock::now();
+        if(chrono::duration_cast<chrono::seconds>(now - lastPrint) > printDuration)
+        {
+            string err_msg = "Have been waiting for a trigger for ";
+            err_msg += to_string(chrono::duration_cast<chrono::seconds>(now - start).count());
+            err_msg += " seconds";
+            writeErrorLog(err_msg);
+            for(int i=0; i<MAX_NUM_BOARDS; i++)
+            {
+                string err_msg = "Buffer for board ";
+                err_msg += to_string(i);
+                err_msg += " has ";
+                err_msg += to_string(fifoOcc[i]);
+                err_msg += " words";
+                writeErrorLog(err_msg);
+            }
+            lastPrint = chrono::steady_clock::now();
+        }
+        if(chrono::duration_cast<chrono::seconds>(now - start) > timeoutDuration)
+        {
+            return 2;
+        }
 
-		//go through all boards on the acc info frame and if 7795 words were transfered note that board
-		for(int k=0; k<MAX_NUM_BOARDS; k++)
-		{
-			if(lastAccBuffer.at(14) & (1 << k))
-			{
-				if(lastAccBuffer.at(16+k)==PSECFRAME)
-				{
-					boardsReadyForRead.push_back(k);
-					readoutSize[k] = PSECFRAME;
-				}else if(lastAccBuffer.at(16+k)==PPSFRAME)
-				{
-					boardsReadyForRead.push_back(k);
-					readoutSize[k] = PPSFRAME;
-				}
-			}
-		}
+        //If sigint happens, return value of 3
+        if(quitacc.load())
+        {
+            return 3;
+        }
 
-		//old trigger
-		if(boardsReadyForRead==alignedAcdcIndices)
-		{
-			break;
-		}
+        for(int k=0; k<MAX_NUM_BOARDS; k++)
+        {
+            if(fifoOcc[k]>=PSECFRAME)
+            {
+                boardsReadyForRead.push_back(k);
+                readoutSize[k] = PSECFRAME;
+            }
+        }
 
-		/*new trigger
-		std::sort(boardsReadyForRead.begin(), boardsReadyForRead.end());
-		bool control = false;
-		if(boardsReadyForRead.size()%2==0)
-		{
-			for(int m=0; m<boardsReadyForRead.size(); m+=2)
-			{
-				if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={0,1})
-				{
-					control = true;
-				}else if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={2,3})
-				{
-					control = true;
-				}else if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={4,5})
-				{
-					control = true;
-				}else if({boardsReadyForRead[m],boardsReadyForRead[m+1]}=={6,7})
-				{
-					control = true;
-				}else
-				{
-					control = false;
-				}
-			}
-			if(control==true)
-			{
-				break;
-			}
-		}*/
-	}
+        //old trigger
+        if(boardsReadyForRead==alignedAcdcIndices)
+        {
+            break;
+        }
+    }
 
-	//each ACDC needs to be queried individually
-	//by the ACC for its buffer. 
-	for(int bi: boardsReadyForRead)
-	{
-		//base command for set readmode and which board bi to read
-		unsigned int command = 0x00210000; 
-		command = command | (unsigned int)(bi); 
-		usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+    //read out data FIFOs 
+    for(int bi: boardsReadyForRead)
+    {
+        //base command for set data readmode and which board bi to read
+        eth.send(0x22, bi);
 
-		//Tranfser the data to a receive vector
-		vector<unsigned short> acdc_buffer = usb->safeReadData(readoutSize[bi]);
+        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
 
-		//Handles buffers =/= 7795 words
-		if((int)acdc_buffer.size() != readoutSize[bi])
-		{
-			string err_msg = "Couldn't read 7795 words as expected! Tryingto fix it! Size was: ";
-			err_msg += to_string(acdc_buffer.size());
-			writeErrorLog(err_msg);
-			return 1;
-		}
+        //Handles buffers =/= 7795 words
+        if((int)acdc_data.size() != 1541)
+        {
+            string err_msg = "Couldn't read " + std::to_string(readoutSize[bi]) + " words as expected! Tryingto fix it! Size was: ";
+            err_msg += to_string(acdc_data.size());
+            writeErrorLog(err_msg);
+            return 1;
+        }
 
 
-		//save this buffer a private member of ACDC
-		//by looping through our acdc vector
-		//and checking each index 
-		for(ACDC* a: acdcs)
-		{
-			if(a->getBoardIndex() == bi)
-			{
-				int retval;
+        //save this buffer a private member of ACDC
+        //by looping through our acdc vector
+        //and checking each index 
+        for(ACDC* a: acdcs)
+        {
+            if(a->getBoardIndex() == bi)
+            {
+                int retval;
 
-				//If raw data is requested save and return 0
-				if(raw==true)
-				{
-					vbuffer = acdc_buffer;
-					string rawfn = outfilename + "Raw_" + timestamp + "_b" + to_string(bi) + ".txt";
-					writeRawDataToFile(acdc_buffer, rawfn);
-					break;
-				}else
-				{
-					//parśe raw data to channel data and metadata
-					retval = a->parseDataFromBuffer(acdc_buffer);
-					map_data[bi] = a->returnData();	
-					if(retval == -3)
-					{
-						break;
-					}else if(retval == 0)
-					{
-						if(metaSwitch == 1)
-						{
-							retval = meta.parseBuffer(acdc_buffer,bi);
-							if(retval != 0)
-							{
-								writeErrorLog("Metadata error not parsed correctly");
-								return 1;						
-							}else
-							{
-								map_meta[bi] = meta.getMetadata();
-							}
-						}else
-						{
-							map_meta[bi] = {0};
-						}
-					}else
-					{
-						writeErrorLog("Data parsing went wrong");
-						return 1;
-					}				
-				}
-			}
-		}
-	}
-	if(raw==false)
-	{
-		datafn = outfilename + "Data_" + timestamp + ".txt";
-		dataofs.open(datafn.c_str(), ios::app); 
-		writePsecData(dataofs, boardsReadyForRead);
-	}
+                //If raw data is requested save and return 0
+                if(raw==true)
+                {
+                    //vbuffer = acdc_data;
+                    string rawfn = outfilename + "Raw_" + timestamp + "_b" + to_string(bi) + ".txt";
+                    writeRawDataToFile(acdc_data, rawfn);
+                    break;
+                }
+                else
+                {
+                    //parśe raw data to channel data and metadata
+                    retval = a->parseDataFromBuffer(acdc_data);
+                    map_data[bi] = a->returnData(); 
+                    if(retval == -3)
+                    {
+                        break;
+                    }
+                    else if(retval == 0)
+                    {
+//                        if(metaSwitch == 1)
+//                        {
+//                            retval = meta.parseBuffer(acdc_buffer,bi);
+//                            if(retval != 0)
+//                            {
+//                                writeErrorLog("Metadata error not parsed correctly");
+//                                return 1;                                               
+//                            }
+//                            else
+//                            {
+//                                map_meta[bi] = meta.getMetadata();
+//                            }
+//                        }
+//                        else
+//                        {
+//                            map_meta[bi] = {0};
+//                        }
+                    }
+                    else
+                    {
+                        writeErrorLog("Data parsing went wrong");
+                        return 1;
+                    }                               
+                }
+            }
+        }
+    }
+    if(raw==false)
+    {
+        datafn = outfilename + "Data_" + timestamp + ".txt";
+        dataofs.open(datafn.c_str(), ios::app); 
+        writePsecData(dataofs, boardsReadyForRead);
+    }
+    //eth.setBurstMode(false);
 
-
-	return 0;
+    return 0;
 }
+
+
+/*ID 27: Turn off triggers and data transfer off */
+void ACC::endRun(unsigned int boardMask)
+{
+    setHardwareTrigSrc(0, boardMask);
+    eth.setBurstMode(false);
+    enableTransfer(0); 
+}
+
 
 
 /*------------------------------------------------------------------------------------*/
@@ -822,76 +710,109 @@ int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
 /*ID 19: Pedestal setting procedure.*/
 bool ACC::setPedestals(unsigned int boardmask, unsigned int chipmask, unsigned int adc)
 {
-	unsigned int command = 0x00A20000;
-	command = (command | (boardmask << 24)) | (chipmask << 12) | adc;
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-	return true;
+    for(int iChip = 0; iChip < 5; ++iChip)
+    {
+	if(chipmask & (0x01 << iChip))
+	{
+	    unsigned int command = 0x00A20000;
+	    command = (command | (boardmask << 24) ) | (iChip << 12) | adc;
+            eth.send(0x100, command);
+	}
+    }
+    return true;
 }
 
 /*ID 24: Special function to check connected ACDCs for their firmware version*/ 
-void ACC::versionCheck()
+void ACC::versionCheck(bool debug)
 {
-	unsigned int command;
+    unsigned int command;
 	
-	//Request ACC info frame
-	command = 0x00200000; 
-	usb->sendData(command);
-	
-	lastAccBuffer = usb->safeReadData(SAFE_BUFFERSIZE);
-	if(lastAccBuffer.size()==ACCFRAME)
+    auto AccBuffer = eth.recieve_many(0x1000, 32);
+    if(AccBuffer.size()==32)
+    {
+        std::cout << "ACC has the firmware version: " << std::hex << AccBuffer.at(0) << std::dec;
+        uint16_t year  = (AccBuffer[1] >> 16) & 0xffff;
+        uint16_t month = (AccBuffer[1] >>  8) & 0xff;
+        uint16_t day   = (AccBuffer[1] >>  0) & 0xff;
+        std::cout << " from " << std::hex << month << "/" << std::hex << day << "/" << std::hex << year << std::endl;
+
+	if(debug)
 	{
-		if(lastAccBuffer.at(1)=0xaaaa)
-		{
-			std::cout << "ACC got the firmware version: " << std::hex << lastAccBuffer.at(2) << std::dec;
-			std::cout << " from " << std::hex << lastAccBuffer.at(4) << std::dec << "/" << std::hex << lastAccBuffer.at(3) << std::dec << std::endl;
-		}else
-		{
-			std::cout << "ACC got the wrong info frame" << std::endl;
-		}
-	}else
-	{
-		std::cout << "ACC got the no info frame" << std::endl;
+	    auto eAccBuffer = eth.recieve_many(0x1100, 64);
+
+	    printf("  PLL lock status:\n    System PLL: %d\n    Serial PLL: %d\n    DPA PLL 1:  %d\n    DPA PLL 2:  %d\n", (AccBuffer[2] & 0x1)?1:0, (AccBuffer[2] & 0x2)?1:0, (AccBuffer[2] & 0x4)?1:0, (AccBuffer[2] & 0x8)?1:0);
+	    printf("  %-30s %10s %10s %10s %10s %10s %10s %10s %10s\n", "", "ACDC0", "ACDC1", "ACDC2", "ACDC3", "ACDC4", "ACDC5", "ACDC6", "ACDC7");
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link rx clk fail", (AccBuffer[16] & 0x1)?1:0, (AccBuffer[16] & 0x2)?1:0, (AccBuffer[16] & 0x4)?1:0, (AccBuffer[16] & 0x8)?1:0, (AccBuffer[16] & 0x10)?1:0, (AccBuffer[16] & 0x20)?1:0, (AccBuffer[16] & 0x40)?1:0, (AccBuffer[16] & 0x80)?1:0);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link align err", (AccBuffer[17] & 0x1)?1:0, (AccBuffer[17] & 0x2)?1:0, (AccBuffer[17] & 0x4)?1:0, (AccBuffer[17] & 0x8)?1:0, (AccBuffer[17] & 0x10)?1:0, (AccBuffer[17] & 0x20)?1:0, (AccBuffer[17] & 0x40)?1:0, (AccBuffer[17] & 0x80)?1:0);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link decode err", (AccBuffer[18] & 0x1)?1:0, (AccBuffer[18] & 0x2)?1:0, (AccBuffer[18] & 0x4)?1:0, (AccBuffer[18] & 0x8)?1:0, (AccBuffer[18] & 0x10)?1:0, (AccBuffer[18] & 0x20)?1:0, (AccBuffer[18] & 0x40)?1:0, (AccBuffer[18] & 0x80)?1:0);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link disparity err", (AccBuffer[19] & 0x1)?1:0, (AccBuffer[19] & 0x2)?1:0, (AccBuffer[19] & 0x4)?1:0, (AccBuffer[19] & 0x8)?1:0, (AccBuffer[19] & 0x10)?1:0, (AccBuffer[19] & 0x20)?1:0, (AccBuffer[19] & 0x40)?1:0, (AccBuffer[19] & 0x80)?1:0);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link Rx FIFO Occ", eAccBuffer[56], eAccBuffer[57], eAccBuffer[58], eAccBuffer[59], eAccBuffer[60], eAccBuffer[61], eAccBuffer[62], eAccBuffer[63]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Byte FIFO 0 Occ", eAccBuffer[0], eAccBuffer[2], eAccBuffer[4], eAccBuffer[6], eAccBuffer[8], eAccBuffer[10], eAccBuffer[12], eAccBuffer[14]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Byte FIFO 1 Occ", eAccBuffer[1], eAccBuffer[3], eAccBuffer[5], eAccBuffer[7], eAccBuffer[9], eAccBuffer[11], eAccBuffer[13], eAccBuffer[15]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS PRBS Err 0", eAccBuffer[16], eAccBuffer[18], eAccBuffer[20], eAccBuffer[22], eAccBuffer[24], eAccBuffer[26], eAccBuffer[28], eAccBuffer[30]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS PRBS Err 1", eAccBuffer[17], eAccBuffer[19], eAccBuffer[21], eAccBuffer[23], eAccBuffer[25], eAccBuffer[27], eAccBuffer[29], eAccBuffer[31]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Symbol Err 0", eAccBuffer[32], eAccBuffer[34], eAccBuffer[36], eAccBuffer[38], eAccBuffer[40], eAccBuffer[42], eAccBuffer[44], eAccBuffer[46]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Symbol Err 1", eAccBuffer[33], eAccBuffer[35], eAccBuffer[37], eAccBuffer[39], eAccBuffer[41], eAccBuffer[43], eAccBuffer[45], eAccBuffer[47]);
+	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MBPS FIFO Occ", eAccBuffer[48], eAccBuffer[49], eAccBuffer[50], eAccBuffer[51], eAccBuffer[52], eAccBuffer[53], eAccBuffer[54], eAccBuffer[55]);
+	    printf("\n");
+	    //for(auto& val : lastAccBuffer) printf("%016lx\n", val);
+	    //for(unsigned int i = 0; i < lastAccBuffer.size(); ++i) printf("stuff: 11%02x: %10ld\n", i, lastAccBuffer[i]);
 	}
+    }
+    else
+    {
+        std::cout << "ACC got the no info frame" << std::endl;
+    }
 
-	//Disables Psec communication
-	command = 0xFFB54000; 
-	usb->sendData(command);
+    //for(int i = 0; i < 16; ++i) printf("byteFIFO occ %5d: %10d\n", i, eth.recieve(0x1100+i));
 
-	//Give the firmware time to disable
-	usleep(10000); 
+    //flush ACDC slow control FIFOs 
+    eth.send(0x2, 0xff);
 	
-	command = 0x000200FF;
-	usb->sendData(command);
-	
-	//Read the ACC infoframe, use sendAndRead for additional buffersize to prevent
-	//leftover words
-	command = 0xFFD00000; 
-	usb->sendData(command);
+    //Request ACDC info frame 
+    command = 0xFFD00000; 
+    eth.send(0x100, command);
 
-	//Loop over the ACC buffer words that show the ACDC buffer size
-	//32 words represent a connected ACDC
-	for(int i = 0; i < MAX_NUM_BOARDS; i++)
-	{
-		command = 0x00210000;
-		command = command | i;
-		usb->sendData(command);
+    usleep(500);
 
-		lastAccBuffer = usb->safeReadData(SAFE_BUFFERSIZE);
-		if(lastAccBuffer.size()==ACDCFRAME)
-		{
-			if(lastAccBuffer.at(1)=0xbbbb)
-			{
-				std::cout << "Board " << i << " got the firmware version: " << std::hex << lastAccBuffer.at(2) << std::dec;
-				std::cout << " from " << std::hex << lastAccBuffer.at(4) << std::dec << "/" << std::hex << lastAccBuffer.at(3) << std::dec << std::endl;
-			}else
-			{
-				std::cout << "Board " << i << " got the wrong info frame" << std::endl;
-			}
-		}else
-		{
-			std::cout << "Board " << i << " is not connected" << std::endl;
-		}
-	}
+    //Loop over the ACC buffer words that show the ACDC buffer size
+    //32 words represent a connected ACDC
+    for(int i = 0; i < MAX_NUM_BOARDS; i++)
+    {
+        uint64_t bufLen = eth.recieve(0x1138+i);
+        if(bufLen > 5)
+        {
+            std::vector<uint64_t> buf = eth.recieve_many(0x1200+i, bufLen, EthernetInterface::NO_ADDR_INC);
+            std::cout << "Board " << i << " has the firmware version: " << std::hex << buf.at(2) << std::dec;
+            std::cout << " from " << std::hex << ((buf.at(4) >> 8) & 0xff) << std::dec << "/" << std::hex << (buf.at(4) & 0xff) << std::dec << "/" << std::hex << buf.at(3) << std::dec << std::endl;
+
+	    if(debug)
+	    {
+		printf("  Header/footer: %4x %4x %4x %4x (%s)\n", buf[0], buf[1], buf[30], buf[31], (buf[0] == 0x1234 && buf[1] == 0xbbbb && buf[30] == 0xbbbb && buf[31] == 0x4321)?"Correct":"Wrong");
+		printf("  PLL lock status:\n    ACC PLL:    %d\n    Serial PLL: %d\n    JC PLL:     %d\n    WR PLL:     %d\n", (buf[6] & 0x4)?1:0, (buf[6] & 0x2)?1:0, (buf[6] & 0x8)?1:0, (buf[6] & 0x1)?1:0);
+		printf("  Backpressure:           %8d\n", (buf[5] & 0x2)?1:0);
+		printf("  40 MBPS parity error:   %8d\n", (buf[5] & 0x1)?1:0);
+		printf("  Event count:            %8d\n", (buf[15] << 16) | buf[16]);
+		printf("  ID Frame count:         %8d\n", (buf[17] << 16) | buf[18]);
+		printf("  Trigger count all:      %8d\n", buf[19]);
+		printf("  Trigger count accepted: %8d\n", buf[20]);
+		printf("  PSEC0 FIFO Occ:         %8d\n", buf[21]);
+		printf("  PSEC1 FIFO Occ:         %8d\n", buf[22]);
+		printf("  PSEC2 FIFO Occ:         %8d\n", buf[23]);
+		printf("  PSEC3 FIFO Occ:         %8d\n", buf[24]);
+		printf("  PSEC4 FIFO Occ:         %8d\n", buf[25]);
+		printf("  Wr time FIFO Occ:       %8d\n", buf[26]);
+		printf("  Sys time FIFO Occ:      %8d\n", buf[27]);
+		printf("\n");
+	    }
+            //printf("bufLen: %ld\n", bufLen);
+            //for(unsigned int j = 0; j < buf.size(); ++j) printf("%3i: %016lx\n", j, buf[j]);
+        }
+        else
+        {
+            std::cout << "Board " << i << " is not connected" << std::endl;
+        }
+    }
 }
 
 
@@ -902,66 +823,15 @@ void ACC::versionCheck()
 void ACC::softwareTrigger()
 {
 	//Software trigger
-	unsigned int command = 0x00100000;
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
+        eth.send(0x0010, 0xff);
 }
 
 /*ID 16: Used to dis/enable transfer data from the PSEC chips to the buffers*/
 void ACC::enableTransfer(int onoff)
 {
-	unsigned int command;
-	if(onoff == 0)//OFF
-	{ 
-		command = 0xFFB54000;
-		usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-	}else if(onoff == 1)//ON
-	{
-		command = 0xFFB50000;
-		usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}	
-	}
-}
-
-/*ID 7: Function to completly empty the USB line until the correct response is received*/
-bool ACC::emptyUsbLine()
-{
-	int send_counter = 0; //number of usb sends
-	int max_sends = 10; //arbitrary. 
-	unsigned int command = 0x00200000; // a refreshing command
-	vector<unsigned short> tempbuff;
-	while(true)
-	{
-		usb->safeReadData(SAFE_BUFFERSIZE);
-		usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-		send_counter++;
-		tempbuff = usb->safeReadData(SAFE_BUFFERSIZE);
-
-		//if it is exactly an ACC buffer size, success. 
-		if(tempbuff.size() == ACCFRAME)
-		{
-			return true;
-		}
-		if(send_counter > max_sends)
-		{
-			string err_msg = "Something wrong with USB line, waking it up. got ";
-			err_msg += to_string(tempbuff.size());
-			err_msg += " words";
-			writeErrorLog(err_msg);
-			usbWakeup();
-			tempbuff = usb->safeReadData(SAFE_BUFFERSIZE);
-			if(tempbuff.size() == ACCFRAME){
-				return true;
-			}else{
-				writeErrorLog("Usb still sleeping. Problem is not fixed.");
-				return false;
- 			}
-		}
-	}
-}
-
-/*ID 8: USB return*/
-stdUSB* ACC::getUsbStream()
-{
-	return usb;
+    unsigned int command;
+    command = 0xFFF60000;
+    eth.send(0x100, command + onoff);
 }
 
 /*ID 10: Clear all ACDC class instances*/
@@ -977,60 +847,31 @@ void ACC::clearAcdcs()
 /*ID 23: Wakes up the USB by requesting an ACC info frame*/
 void ACC::usbWakeup()
 {
-	unsigned int command = 0x00200000;
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
+//	unsigned int command = 0x00200000;
+//	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
 }
 
 /*ID 18: Tells ACDCs to clear their ram.*/ 
 void ACC::dumpData(unsigned int boardMask)
 {
-	unsigned int command = 0x00020000; //base command for set readmode
-	command = command | boardMask;
-	//send and read. 
-	usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-	//usb->safeReadData(SAFE_BUFFERSIZE + 2);
+	//send and read.
+        eth.send(0x0001, boardMask);
 }
 
-/*ID 26: Read ACC buffer for Info frame*/
-vector<unsigned short> ACC::getACCInfoFrame()
-{
-	unsigned int command = 0x00200000;	 
-	vector<unsigned short> buffer;
-	int counter = 0;
-	while(counter<5)
-	{	
-		usbcheck=usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-		buffer = usb->safeReadData(SAFE_BUFFERSIZE);
-		
-		if(buffer.size()!=ACCFRAME)
-		{
-			counter++;
-			writeErrorLog("Could not read ACC info frame");
-		}else
-		{
-			map_accIF = buffer;
-			return buffer;	
-		}
-	}
-	return {};
-}
 
 /*ID 27: Resets the ACDCs*/
 void ACC::resetACDC()
 {
-		unsigned int command = 0xFFFF0000;
-		usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-		usleep(1000000);
-		std::cout << "ACDCs were reset" << std::endl;
+    unsigned int command = 0xFFFF0000;
+    eth.send(0x100, command);
+    std::cout << "ACDCs were reset" << std::endl;
 }
 
 /*ID 28: Resets the ACCs*/
 void ACC::resetACC()
 {
-		unsigned int command = 0x00000000;
-		usb->sendData(command); if(usbcheck==false){writeErrorLog("Send Error");}
-		usleep(1000000);
-		std::cout << "ACCs was reset" << std::endl;
+    eth.send(0x0000, 0x1);
+    std::cout << "ACCs was reset" << std::endl;
 }
 
 
@@ -1048,25 +889,26 @@ void ACC::writeErrorLog(string errorMsg)
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&in_time_t), "%m-%d-%Y %X");
-    os_err << "------------------------------------------------------------" << endl;
-    os_err << ss.str() << endl;
-    os_err << errorMsg << endl;
-    os_err << "------------------------------------------------------------" << endl;
-    os_err.close();
+//    ss << std::put_time(std::localtime(&in_time_t), "%m-%d-%Y %X");
+//    os_err << "------------------------------------------------------------" << endl;
+//    os_err << ss.str() << endl;
+//    os_err << errorMsg << endl;
+//    os_err << "------------------------------------------------------------" << endl;
+//    os_err.close();
 }
 
 /*ID 30: Write function for the raw data format*/
-void ACC::writeRawDataToFile(vector<unsigned short> buffer, string rawfn)
+void ACC::writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn)
 {
-	ofstream d(rawfn.c_str(), ios::app); 
-	for(unsigned short k: buffer)
-	{
-		d << hex <<  k << " ";
-	}
-	d << endl;
-	d.close();
-	return;
+    ofstream d(rawfn.c_str(), ios::app | ios::binary); 
+    d.write(reinterpret_cast<const char*>(buffer.data()), buffer.size()*sizeof(uint64_t));
+//    for(const uint64_t& k : buffer)
+//    {
+//        d << hex <<  k << " ";
+//    }
+//    d << "\n";
+    d.close();
+    return;
 }
 
 /*ID 31: Write function for the parsed data format*/
@@ -1103,4 +945,172 @@ void ACC::writePsecData(ofstream& d, vector<int> boardsReadyForRead)
 		d << endl;
 	}
 	d.close();
+}
+
+/*ID 25: Scan possible high speed link clock phases and select the optimal phase setting*/ 
+void ACC::scanLinkPhase(unsigned int boardMask, bool print)
+{
+    std::vector<std::vector<uint64_t>> errors;
+
+    if(print)
+    {
+        printf("Phase  ");
+        for(int iChan = 0; iChan < 8; iChan += 2) printf("%25s %2d %21s", "ACDC:", iChan/2, " ");
+        printf("\n      ");
+        for(int iChan = 0; iChan < 8; ++iChan) printf("%12s %2d          ", "Channel:", iChan%2);
+        printf("\n      ");
+        for(int iChan = 0; iChan < 8; ++iChan) printf(" %10s %9s    ", "Encode err", "PRBS err");
+        printf("\n");
+    }
+    
+    for(int iOffset = 0; iOffset < 24; ++iOffset)
+    {
+        // advance phase one step (there are 24 total steps in one cock cycle)
+        eth.send(0x0054, 0x0000);
+        for(int iChan = 0; iChan < 8; ++iChan)
+        {
+            eth.send(0x0055, 0x0000 + iChan);
+            eth.send(0x0056, 0x0000);
+        }
+
+        // transmit idle pattern to make sure link is aligned 
+        enableTransfer(0);
+
+        usleep(1000);
+
+        //transmit PRBS pattern 
+        enableTransfer(1);
+
+        usleep(100);
+
+        //reset error counters 
+        eth.send(0x0053, 0x0000);
+
+        usleep(1000);
+
+        std::vector<uint64_t> decode_errors = eth.recieve_many(0x1120, 8);
+        if(print)
+        {
+            std::vector<uint64_t> prbs_errors = eth.recieve_many(0x1110, 8);
+
+            printf("%5d  ", iOffset);
+            for(int iChan = 0; iChan < 8; ++iChan) printf("%10d %9d     ", uint32_t(decode_errors[iChan]), uint32_t(prbs_errors[iChan]));
+            printf("\n");
+        }
+
+        errors.push_back(decode_errors);
+    }
+
+    // set transmitter back to idle mode
+    enableTransfer(0);
+
+    if(boardMask)
+    {
+        if(print) printf("Set:   "); 
+        for(int iChan = 0; iChan < 8; ++iChan)
+        {
+            // set phase for chanels in boardMask
+            if(boardMask & (1 << iChan))
+            {
+                int stop = 0;
+                int length = 0;
+                int length_best = 0;
+                for(int i = 0; i < int(2*errors.size()); ++i)
+                {
+                    int imod = i % errors.size();
+                    if(errors[imod][iChan] == 0)
+                    {
+                        ++length;
+                    }
+                    else
+                    {
+                        if(length >= length_best)
+                        {
+                            stop = imod;
+                            length_best = length;
+                        }
+                        length = 0;
+//                if(i > int(errors.size())) break;
+                    }
+                }
+                int phaseSetting = (stop - length_best/2)%errors.size();
+                if(print) printf("%15d          ", phaseSetting);
+                eth.send(0x0054, 0x0000);
+                eth.send(0x0055,  iChan);
+                for(int i = 0; i < phaseSetting; ++i)
+                {
+                    eth.send(0x0056, 0x0000);	    
+                }
+            }
+            else
+            {
+                if(print) printf("%25s", " ");
+            }
+        }
+        if(print) printf("\n"); 
+
+	// ensure at least 1 ms for links to realign (ensures at least 25 alignment markers)
+	usleep(1000);
+
+        //reset error counters 
+        eth.send(0x0053, 0x0000);
+    }
+
+}
+
+void ACC::sendJCPLLSPIWord(unsigned int word, unsigned int boardMask, bool verbose)
+{
+    unsigned int clearRequest = 0x00F10000 | (boardMask << 24);
+    unsigned int lower16 = 0x00F30000 | (boardMask << 24) | (0xFFFF & word);
+    unsigned int upper16 = 0x00F40000 | (boardMask << 24) | (0xFFFF & (word >> 16));
+    unsigned int setPLL = 0x00F50000 | (boardMask << 24);
+    
+    eth.send(0x100, clearRequest);
+    eth.send(0x100, lower16);
+    eth.send(0x100, upper16);
+    eth.send(0x100, setPLL);
+    eth.send(0x100, clearRequest);
+
+    if(verbose)
+    {
+	printf("send 0x%08x\n", lower16);
+	printf("send 0x%08x\n", upper16);
+	printf("send 0x%08x\n", setPLL);
+    }
+}
+
+/*ID 26: Configure the jcPLL settings */
+void ACC::configJCPLL(unsigned int boardMask)
+{
+    // program registers 0 and 1 with approperiate settings for 40 MHz output 
+    //sendJCPLLSPIWord(0x55500060, boardMask); // 25 MHz input
+    sendJCPLLSPIWord(0x5557C060, boardMask); // 125 MHz input
+    usleep(2000);    
+    //sendJCPLLSPIWord(0x83810001, boardMask); // 25 MHz input
+    sendJCPLLSPIWord(0xFF810081, boardMask); // 125 MHz input
+    usleep(2000);
+
+    // cycle "power down" to force VCO calibration 
+    sendJCPLLSPIWord(0x00001802, boardMask);
+    usleep(2000);
+    sendJCPLLSPIWord(0x00001002, boardMask);
+    usleep(2000);
+    sendJCPLLSPIWord(0x00001802, boardMask);
+    usleep(2000);
+
+    // toggle sync bit to synchronize output clocks
+    sendJCPLLSPIWord(0x0001802, boardMask);
+    usleep(2000);
+    sendJCPLLSPIWord(0x0000802, boardMask);
+    usleep(2000);
+    sendJCPLLSPIWord(0x0001802, boardMask);
+    usleep(2000);
+
+    // read register
+//    sendJCPLLSPIWord(0x0000000e);
+//    sendJCPLLSPIWord(0x00000000);
+
+    // write register contents to EEPROM
+    //sendJCPLLSPIWord(0x0000000f);
+
 }

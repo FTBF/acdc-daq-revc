@@ -1,4 +1,3 @@
-#include "stdUSB.h"
 #include <sstream>
 #include <string>
 #include <iostream>
@@ -44,42 +43,35 @@ void printReadBuffer(vector<unsigned short> b)
 
 int main(int argc, char *argv[])
 {
-	
-	stdUSB* usb = new stdUSB();
-	if(!usb->isOpen())
-	{
-		cout << "Usb was unable to connect to ACC" << endl;
-		delete usb;
-		return 0;
-	}
-
-	//number of 16 bit words to allocate memory for usb read
-	int usbReadBufferMax = 20000;
-
-	for(int c = 1; c < argc; c++)
-	{
-		usleep(100000); //100 ms delay
-		//read and move on
-		if(string(argv[c]) == "r")
-		{
-			vector<unsigned short> buff = usb->safeReadData(usbReadBufferMax);
-			printReadBuffer(buff);
-			continue;
-		}
-		else
-		{
-			//send data
-			stringstream ss;
-			unsigned int cmd;
-			ss << argv[c];
-			ss >> std::hex >> cmd;
-			cout << "Sending: " << std::hex << cmd << endl;
-			cout << std::dec;
-			usb->sendData(cmd);
-			continue;
-		}
-	}
-
-	delete usb;
+// NEEDS TO BE REWRITTEN FOR ETHERNET INTERFACE	
+//
+//	//number of 16 bit words to allocate memory for usb read
+//	int usbReadBufferMax = 20000;
+//
+//	for(int c = 1; c < argc; c++)
+//	{
+//		usleep(100000); //100 ms delay
+//		//read and move on
+//		if(string(argv[c]) == "r")
+//		{
+//			vector<unsigned short> buff = usb->safeReadData(usbReadBufferMax);
+//			printReadBuffer(buff);
+//			continue;
+//		}
+//		else
+//		{
+//			//send data
+//			stringstream ss;
+//			unsigned int cmd;
+//			ss << argv[c];
+//			ss >> std::hex >> cmd;
+//			cout << "Sending: " << std::hex << cmd << endl;
+//			cout << std::dec;
+//			usb->sendData(cmd);
+//			continue;
+//		}
+//	}
+//
+//	delete usb;
 	return 0;
 }

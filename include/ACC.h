@@ -2,7 +2,7 @@
 #define _ACC_H_INCLUDED
 
 #include "ACDC.h" // load the ACDC class
-#include "stdUSB.h" //load the usb class 
+#include "EthernetInterface.h"
 #include <algorithm>
 #include <vector>
 #include <map>
@@ -15,7 +15,7 @@ using namespace std;
 #define ACCFRAME 32
 #define ACDCFRAME 32
 #define PPSFRAME 16
-#define PSECFRAME 7795
+#define PSECFRAME 7696
 
 class ACC
 {
@@ -38,13 +38,11 @@ public:
 	/*ID Nan: Returns the meta map*/
 	map<int, vector<unsigned short>> returnMeta(){return map_meta;} 
 	/*ID Nan: Returns the raw data vector*/
-	vector<unsigned short> returnRaw(){return vbuffer;}
+	vector<uint64_t> returnRaw(){return vbuffer;}
 	/*ID Nan: Returns the acdc info frame map*/
 	map<int, vector<unsigned short>> returnACDCIF(){return map_acdcIF;} 
 	/*ID Nan: Returns the acc info frame map*/
 	vector<unsigned short> returnACCIF(){return map_accIF;} 
-	/*ID Nan: Returns the ACC info frame*/
-	vector<unsigned short> getACCInfoFrame();
 
 	/*------------------------------------------------------------------------------------*/
 	/*-------------------------Local set functions for board setup------------------------*/
@@ -76,10 +74,6 @@ public:
 
 	/*------------------------------------------------------------------------------------*/
 	/*-------------------------Local set functions for board setup------------------------*/
-	/*ID 7: Function to completly empty the USB line until the correct response is received*/
-	bool emptyUsbLine(); 
-	/*ID 8: USB return*/
-	stdUSB* getUsbStream(); 
 	/*ID:9 Create ACDC class instances for each connected ACDC board*/
 	int createAcdcs(); 
 	/*ID 10: Clear all ACDC class instances*/
@@ -111,7 +105,13 @@ public:
 	/*ID 23: Wakes up the USB by requesting an ACC info frame*/
 	void usbWakeup(); 
 	/*ID 24: Special function to check connected ACDCs for their firmware version*/ 
-	void versionCheck();
+	void versionCheck(bool debug = false);
+	/*ID 25: Scan possible high speed link clock phases and select the optimal phase setting*/ 
+	void scanLinkPhase(unsigned int boardMask, bool print = false);
+        /*ID 26: Configure the jcPLL settings */
+	void configJCPLL(unsigned int boardMask = 0xff);
+        /*ID 27: Turn off triggers and data transfer off */
+	void endRun(unsigned int boardMask = 0xff);
 	//:::
 	void resetACDC(); //resets the acdc boards
 	void resetACC(); //resets the acdc boards 
@@ -120,12 +120,12 @@ public:
 	/*--------------------------------------Write functions-------------------------------*/
 	void writeErrorLog(string errorMsg); //writes an errorlog with timestamps for debugging
 	void writePsecData(ofstream& d, vector<int> boardsReadyForRead); //main write for the data map
-	void writeRawDataToFile(vector<unsigned short> buffer, string rawfn); //main write for the raw data vector
+	void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
 
 private:
 	/*------------------------------------------------------------------------------------*/
 	/*---------------------------------Load neccessary classes----------------------------*/
-	stdUSB* usb; //calls the usb class for communication
+        EthernetInterface eth, eth_burst;
 	Metadata meta; //calls the metadata class for file write
 	vector<ACDC*> acdcs; //a vector of active acdc boards. 
 
@@ -143,17 +143,18 @@ private:
 	unsigned int validation_window; //var: validation window for some triggermodes
 	unsigned int PPSRatio;
 	int PPSBeamMultiplexer;
-	vector<unsigned short> lastAccBuffer; //most recently received ACC buffer
+//	vector<unsigned short> lastAccBuffer; //most recently received ACC buffer
 	vector<int> alignedAcdcIndices; //number relative to ACC index (RJ45 port) corresponds to the connected ACDC boards
 	vector<unsigned int> SELF_psec_channel_mask; //var: PSEC channels active for self trigger
 	vector<int> SELF_psec_chip_mask; //var: PSEC chips actove for self trigger
 	map<int, map<int, vector<unsigned short>>> map_data; //entire data map | index: board < channel < samplevector
 	map<int,vector<unsigned short>> map_meta; //entire meta map | index: board < metakey < value
-	vector<unsigned short> vbuffer;
+	vector<uint64_t> vbuffer;
 	map<int, vector<unsigned short>> map_acdcIF;
 	vector<unsigned short> map_accIF;
 
 	static void got_signal(int);
+        void sendJCPLLSPIWord(unsigned int word, unsigned int boardMask = 0xff, bool verbose = false);
 };
 
 #endif

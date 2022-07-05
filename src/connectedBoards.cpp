@@ -8,20 +8,10 @@
 
 using namespace std;
 
-int main()
+int main(int argn, char * argv[])
 {
 	ACC acc;
-	/*
-	int retval = acc.whichAcdcsConnected(); 
-	if(retval==-1)
-	{
-		std::cout << "Trying to reset ACDC boards" << std::endl;
-		acc.resetACDC();
-		int retval = acc.whichAcdcsConnected();
-		if(retval==-1)
-		{
-			std::cout << "After ACDC reset no changes, still no boards found" << std::endl;
-		}
-	}*/
-	acc.versionCheck();
+
+	if(argn > 1) acc.versionCheck(true);
+	else         acc.versionCheck(false);
 }

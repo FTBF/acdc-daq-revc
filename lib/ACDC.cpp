@@ -28,115 +28,64 @@ void ACDC::setBoardIndex(int bi)
 //argument toggles whether you want to subtract
 //pedestals and convert ADC-counts to mV live
 //or keep the data in units of raw ADC counts. 
-//retval: 
+//retval:  ... 1 and 2 are never returned ... 
 //2: other error
 //1: corrupt buffer 
 //0: all good
-int ACDC::parseDataFromBuffer(vector<unsigned short> buffer)
+int ACDC::parseDataFromBuffer(const vector<uint64_t>& buffer)
 {
-	//Catch empty buffers
-	if(buffer.size() == 0)
-	{
-		std::cout << "You tried to parse ACDC data without pulling/setting an ACDC buffer" << std::endl;
-		return -1;
-	}
+    //Catch empty buffers
+    if(buffer.size() == 0)
+    {
+        std::cout << "You tried to parse ACDC data without pulling/setting an ACDC buffer" << std::endl;
+        return -1;
+    }
 
-	if(buffer.size() == 16)
-	{
-		data[0] = buffer;
-		return -3;	
-	}
+    //clear the data map prior.
+    data.clear();
 
-	//clear the data map prior.
-	data.clear();
+    //check for fixed words in header
+    if(((buffer[1] >> 48) & 0xffff) != 0xac9c || (buffer[4] & 0xffff) != 0xcac9)
+    {
+        printf("%lx, %lx\n", (buffer[1] >> 48) & 0xffff, buffer[4] & 0xffff);
+        std::cout << "Data buffer header corrupt" << std::endl;
+        return -2;
+    }
 
-	//Helpers
-	int DistanceFromZero;
-	int channel_count=0;
+    //Fill data map
+    int channel_count = 0;
+    int cap_count = 0;
+    decltype(data.emplace()) empl_retval;
+    for(unsigned int i = 5; i < buffer.size(); ++i)
+    {
+        for(int j = 4; j >=0; --j)
+        {
+            if(cap_count == 0) empl_retval = data.emplace(std::piecewise_construct, std::forward_as_tuple(channel_count), std::forward_as_tuple(256));
+            (*(empl_retval.first)).second[cap_count] = (buffer[i] >> (j*12)) & 0xfff;
+            ++cap_count;
+            if(cap_count >= 256)
+            {
+                cap_count = 0;
+                ++channel_count;
+            }
+        }
+    }
 
-	//Indicator words for the start/end of the data
-	const unsigned short startword = 0xF005; 
-	unsigned short endword = 0xBA11;
-	unsigned short endoffile = 0x4321;
+    if(data.size()!=NUM_CH)
+    {
+        cout << "error 1: Not 30 channels " << data.size() << endl;
+        for(const auto& thing : data) cout << thing.second.size() << std::endl;
+    }
 
-	//Empty vector with positions of aboves startword
-	vector<int> start_indices; 
+    for(int i=0; i<NUM_CH; i++)
+    {
+        if(data[i].size()!=NUM_SAMP)
+        {
+            cout << "error 2: not 256 samples in channel " << i << endl;
+        }
+    }
 
-	//Find the startwords and write them to the vector
-	vector<unsigned short>::iterator bit;
-	for(bit = buffer.begin(); bit != buffer.end(); ++bit)
-	{
-		if(*bit == startword)
-		{
-			DistanceFromZero= std::distance(buffer.begin(), bit);
-			start_indices.push_back(DistanceFromZero);
-		}
-	}
-
-	//Filter in cases where one of the start words is found in the metadata 
-	if(start_indices.size()>NUM_PSEC)
-	{
-		for(int k=0; k<(int)start_indices.size()-1; k++)
-		{
-		    if(start_indices[k+1]-start_indices[k]>6*256+14)
-		    {
-				//nothing
-		    }else
-		    {
-				start_indices.erase(start_indices.begin()+(k+1));
-				k--;
-		    }
-		}
-	}
-
-	//Last case emergency stop if metadata is still not quite right
-	if(start_indices.size() != NUM_PSEC)
-	{
-		string fnnn = "acdc-corrupt-psec-buffer.txt";
-		cout << "Printing to file : " << fnnn << endl;
-		ofstream cb(fnnn);
-		for(unsigned short k: buffer)
-		{
-		    cb << hex << k << endl;
-		}
-		return -2;
-	}
-
-	//Fill data map
-	for(int i: start_indices)
-	{
-		//Write the first word after the startword
-		bit = buffer.begin() + (i+1);
-
-		//As long as the endword isn't reached copy metadata words into a vector and add to map
-		vector<unsigned short> InfoWord;
-		while(*bit != endword && *bit != endoffile)
-		{
-			InfoWord.push_back((unsigned short)*bit);
-			if(InfoWord.size()==NUM_SAMP)
-			{
-				data.insert(pair<int, vector<unsigned short>>(channel_count, InfoWord));
-				InfoWord.clear();
-				channel_count++;
-			}
-			++bit;
-		}	
-	}
-
-	if(data.size()!=NUM_CH)
-	{
-		cout << "error 1: Not 30 channels" << endl;
-	}
-
-	for(int i=0; i<NUM_CH; i++)
-	{
-		if(data[i].size()!=NUM_SAMP)
-		{
-			cout << "error 2: not 256 samples in channel " << i << endl;
-		}
-	}
-
-	return 0;
+    return 0;
 }
 
 
@@ -150,12 +99,12 @@ void ACDC::writeErrorLog(string errorMsg)
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&in_time_t), "%m-%d-%Y %X");
-    os_err << "------------------------------------------------------------" << endl;
-    os_err << ss.str() << endl;
-    os_err << errorMsg << endl;
-    os_err << "------------------------------------------------------------" << endl;
-    os_err.close();
+//    ss << std::put_time(std::localtime(&in_time_t), "%m-%d-%Y %X");
+//    os_err << "------------------------------------------------------------" << endl;
+//    os_err << ss.str() << endl;
+//    os_err << errorMsg << endl;
+//    os_err << "------------------------------------------------------------" << endl;
+//    os_err.close();
 }
 
 

@@ -258,10 +258,10 @@ void Metadata::writeErrorLog(string errorMsg)
     auto now = std::chrono::system_clock::now();
     auto in_time_t = std::chrono::system_clock::to_time_t(now);
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&in_time_t), "%m-%d-%Y %X");
-    os_err << "------------------------------------------------------------" << endl;
-    os_err << ss.str() << endl;
-    os_err << errorMsg << endl;
-    os_err << "------------------------------------------------------------" << endl;
+//    ss << std::put_time(std::localtime(&in_time_t), "%m-%d-%Y %X");
+//    os_err << "------------------------------------------------------------" << endl;
+//    os_err << ss.str() << endl;
+//    os_err << errorMsg << endl;
+//    os_err << "------------------------------------------------------------" << endl;
     os_err.close();
 }
