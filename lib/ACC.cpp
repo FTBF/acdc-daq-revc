@@ -31,6 +31,11 @@ ACC::ACC() : eth("192.168.46.108", "2007"), eth_burst("192.168.46.108", "2008")
 	bool clearCheck;
 }
 
+ACC::ACC(const std::string& ip) : eth(ip, "2007"), eth_burst(ip, "2008")
+{
+	bool clearCheck;
+}
+
 /*ID:6 Destructor*/
 ACC::~ACC()
 {
@@ -39,6 +44,12 @@ ACC::~ACC()
 
 /*------------------------------------------------------------------------------------*/
 /*---------------------------Setup functions for ACC/ACDC-----------------------------*/
+
+void ACC::parseCfg(const YAML::Node& config)
+{
+    
+    //initializeForDataReadout(int trigMode, unsigned int boardMask, int calibMode);    
+}
 
 /*ID:9 Create ACDC class instances for each connected ACDC board*/
 int ACC::createAcdcs()
@@ -143,7 +154,7 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
         // REVIEW ERRORS AND MESSAGES 
         for(int bi: alignedAcdcIndices)
 	{
-            // read ACD info frame 
+            // read ACDC info frame 
             eth.send(0x100, 0x00D00000 | (1 << (bi + 24)));
 
             std::vector<uint64_t> acdcInfo = eth.recieve_many(0x1200 + bi, 32, EthernetInterface::NO_ADDR_INC);
@@ -186,6 +197,8 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 	//ACDC trigger
 	command = 0xffB00000;
 	eth.send(0x100, command);
+        //disable data transmission
+        enableTransfer(0); 
 
 	// Toogels the calibration mode on if requested
 	toggleCal(calibMode, 0x7FFF, boardMask);
@@ -204,11 +217,11 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 			writeErrorLog("Trigger source turned off");	
 			break;
 		case 1: //Software trigger
-			setSoftwareTrigger(boardMask);
+                        setHardwareTrigSrc(trigMode,boardMask);
 			break;
 		case 2: //Self trigger
 			setHardwareTrigSrc(trigMode,boardMask);
-			break;//goto selfsetup;
+			goto selfsetup;
 		case 3: //Self trigger with validation 
 			setHardwareTrigSrc(trigMode,boardMask);
                         //timeout 
@@ -227,7 +240,7 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 			
                         eth.send(0x003a, validation_window);
 			
-                        eth.send(0x003b, PPSBeamMultiplexer);
+                        //eth.send(0x003b, PPSBeamMultiplexer);
 			
 			goto selfsetup;
 			break;
@@ -237,20 +250,17 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 		selfsetup:
  			command = 0x00B10000;
 			
-			cout << "Chip: ";
-			for(int k: SELF_psec_chip_mask){cout << k << " - ";}
-			cout << endl;
 			printf("%s","Channel-Mask: ");
 			for(unsigned int k: SELF_psec_channel_mask){printf("0x%02x\t",k);}
 			printf("\n");
 			
-			if(SELF_psec_chip_mask.size()!=SELF_psec_channel_mask.size())
+			if(5!=SELF_psec_channel_mask.size())
 			{
 				writeErrorLog("PSEC mask error");	
 			}
 			
 			std::vector<unsigned int> CHIPMASK = {0x00000000,0x00001000,0x00002000,0x00003000,0x00004000};
-			for(int i=0; i<(int)SELF_psec_chip_mask.size(); i++)
+			for(int i=0; i<(int)SELF_psec_channel_mask.size(); i++)
 			{		
 				command = 0x00B10000;
 				command = (command | (boardMask << 24)) | CHIPMASK[i] | SELF_psec_channel_mask[i]; printf("Mask: 0x%08x\n",command);
@@ -266,15 +276,21 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 			command = 0x00B18000;
 			command = (command | (boardMask << 24)) | SELF_coincidence_onoff;
                         eth.send(0x100, command);
-                        // MUST STILL INPLEMENT INDIVIDUAL THRESHOLDS!!!!!!!!
-                        for(int iChip = 0; iChip < 5; ++iChip)
+                        if(SELF_thresholds.size() >= 30)
                         {
-                            for(int iChan = 0; iChan < 6; ++iChan)
+                            for(int iChip = 0; iChip < 5; ++iChip)
                             {
-                                command = 0x00A60000;
-                                command = ((command + (iChan << 16)) | (boardMask << 24)) | (iChip << 12) | SELF_threshold;
-                                eth.send(0x100, command);
+                                for(int iChan = 0; iChan < 6; ++iChan)
+                                {
+                                    command = 0x00A60000;
+                                    command = ((command + (iChan << 16)) | (boardMask << 24)) | (iChip << 12) | SELF_thresholds[6*iChip + iChan];
+                                    eth.send(0x100, command);
+                                }
                             }
+                        }
+                        else
+                        {
+                            // thorw some form of error here
                         }
 	}
 
@@ -287,22 +303,6 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 	enableTransfer(3); 
         
 	return 0;
-}
-
-/*ID 12: Set up the software trigger*/
-void ACC::setSoftwareTrigger(unsigned int boardMask)
-{	
-	unsigned int command;
-
-	//Set the trigger
-	command = 0x00B00001; //Sets the trigger of all ACDC boards to 1 = Software trigger
-	command = (command | (boardMask << 24));
-        eth.send(0x100, command);
-        for(unsigned int i = 0; i < 8; ++i)
-        {
-            if((boardMask >> i) & 1) eth.send(0x0030+i, 1);
-            else                     eth.send(0x0030+i, 0);
-        }
 }
 
 /*ID 21: Set up the hardware trigger*/
@@ -332,7 +332,7 @@ void ACC::setHardwareTrigSrc(int src, unsigned int boardMask)
             ACDCtrigMode = 2;
             break;
         case 3:
-            ACCtrigMode = 1;
+            ACCtrigMode = 2;
             ACDCtrigMode = 3;
             break;
         case 4:
@@ -349,7 +349,7 @@ void ACC::setHardwareTrigSrc(int src, unsigned int boardMask)
 	//ACC hardware trigger
         for(unsigned int i = 0; i < 8; ++i)
         {
-            if((boardMask >> i) & 1) eth.send(0x0030+i, 2);
+            if((boardMask >> i) & 1) eth.send(0x0030+i, ACCtrigMode);
             else                     eth.send(0x0030+i, 0);
         }
 	//ACDC hardware trigger
@@ -479,26 +479,26 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 					//}
 //					meta.checkAndInsert("Board", bi);
 //					map_meta[bi] = meta.getMetadata();
-//					if(retval !=0)
-//					{
-//						string err_msg = "Corrupt buffer caught at PSEC data level (2)";
-//						if(retval == 3)
-//						{
-//							err_msg += "Because of the Metadata buffer";
-//						}
-//						writeErrorLog(err_msg);
-//						corruptBuffer = true;
-//					}
-//
-//					if(corruptBuffer)
-//					{
-//						string err_msg = "got a corrupt buffer with retval ";
-//						err_msg += to_string(retval);
-//						writeErrorLog(err_msg);
-//						return 1;
-//					}
-//	
-//					map_data[bi] = a->returnData();
+					if(retval !=0)
+					{
+						string err_msg = "Corrupt buffer caught at PSEC data level (2)";
+						if(retval == 3)
+						{
+							err_msg += "Because of the Metadata buffer";
+						}
+						writeErrorLog(err_msg);
+						corruptBuffer = true;
+					}
+
+					if(corruptBuffer)
+					{
+						string err_msg = "got a corrupt buffer with retval ";
+						err_msg += to_string(retval);
+						writeErrorLog(err_msg);
+						return 1;
+					}
+	
+					map_data[bi] = a->returnData();
 				}
 			}
 		}
@@ -518,8 +518,10 @@ int ACC::readAcdcBuffers(bool raw, string timestamp)
 }
 
 /*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
-int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
+int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, const string& label)
 {
+    (void)trigMode; //currently unused
+
     bool corruptBuffer;
     vector<int> boardsReadyForRead;
     map<int,int> readoutSize;
@@ -530,6 +532,15 @@ int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
     string outfilename = "./Results/";
     string datafn;
     ofstream dataofs;
+
+    string rawfn;
+    if(raw==true)
+    {
+        //vbuffer = acdc_data;
+        rawfn = outfilename + "Raw_";
+        if(label.size() > 0) rawfn += label + "_";
+        rawfn += timestamp + "_b";
+    }
 
     //this function is simply readAcdcBuffers
     //if the trigMode is software
@@ -617,7 +628,7 @@ int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
 
         std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
 
-        //Handles buffers =/= 7795 words
+        //Handles buffers of incorrect size
         if((int)acdc_data.size() != 1541)
         {
             string err_msg = "Couldn't read " + std::to_string(readoutSize[bi]) + " words as expected! Tryingto fix it! Size was: ";
@@ -630,6 +641,7 @@ int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
         //save this buffer a private member of ACDC
         //by looping through our acdc vector
         //and checking each index 
+        //FIX THIS NONSENSE
         for(ACDC* a: acdcs)
         {
             if(a->getBoardIndex() == bi)
@@ -639,9 +651,7 @@ int ACC::listenForAcdcData(int trigMode, bool raw, string timestamp)
                 //If raw data is requested save and return 0
                 if(raw==true)
                 {
-                    //vbuffer = acdc_data;
-                    string rawfn = outfilename + "Raw_" + timestamp + "_b" + to_string(bi) + ".txt";
-                    writeRawDataToFile(acdc_data, rawfn);
+                    writeRawDataToFile(acdc_data, rawfn + to_string(bi) + ".txt");
                     break;
                 }
                 else
@@ -746,14 +756,14 @@ void ACC::versionCheck(bool debug)
 	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link align err", (AccBuffer[17] & 0x1)?1:0, (AccBuffer[17] & 0x2)?1:0, (AccBuffer[17] & 0x4)?1:0, (AccBuffer[17] & 0x8)?1:0, (AccBuffer[17] & 0x10)?1:0, (AccBuffer[17] & 0x20)?1:0, (AccBuffer[17] & 0x40)?1:0, (AccBuffer[17] & 0x80)?1:0);
 	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link decode err", (AccBuffer[18] & 0x1)?1:0, (AccBuffer[18] & 0x2)?1:0, (AccBuffer[18] & 0x4)?1:0, (AccBuffer[18] & 0x8)?1:0, (AccBuffer[18] & 0x10)?1:0, (AccBuffer[18] & 0x20)?1:0, (AccBuffer[18] & 0x40)?1:0, (AccBuffer[18] & 0x80)?1:0);
 	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link disparity err", (AccBuffer[19] & 0x1)?1:0, (AccBuffer[19] & 0x2)?1:0, (AccBuffer[19] & 0x4)?1:0, (AccBuffer[19] & 0x8)?1:0, (AccBuffer[19] & 0x10)?1:0, (AccBuffer[19] & 0x20)?1:0, (AccBuffer[19] & 0x40)?1:0, (AccBuffer[19] & 0x80)?1:0);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link Rx FIFO Occ", eAccBuffer[56], eAccBuffer[57], eAccBuffer[58], eAccBuffer[59], eAccBuffer[60], eAccBuffer[61], eAccBuffer[62], eAccBuffer[63]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Byte FIFO 0 Occ", eAccBuffer[0], eAccBuffer[2], eAccBuffer[4], eAccBuffer[6], eAccBuffer[8], eAccBuffer[10], eAccBuffer[12], eAccBuffer[14]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Byte FIFO 1 Occ", eAccBuffer[1], eAccBuffer[3], eAccBuffer[5], eAccBuffer[7], eAccBuffer[9], eAccBuffer[11], eAccBuffer[13], eAccBuffer[15]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS PRBS Err 0", eAccBuffer[16], eAccBuffer[18], eAccBuffer[20], eAccBuffer[22], eAccBuffer[24], eAccBuffer[26], eAccBuffer[28], eAccBuffer[30]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS PRBS Err 1", eAccBuffer[17], eAccBuffer[19], eAccBuffer[21], eAccBuffer[23], eAccBuffer[25], eAccBuffer[27], eAccBuffer[29], eAccBuffer[31]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Symbol Err 0", eAccBuffer[32], eAccBuffer[34], eAccBuffer[36], eAccBuffer[38], eAccBuffer[40], eAccBuffer[42], eAccBuffer[44], eAccBuffer[46]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MPBS Symbol Err 1", eAccBuffer[33], eAccBuffer[35], eAccBuffer[37], eAccBuffer[39], eAccBuffer[41], eAccBuffer[43], eAccBuffer[45], eAccBuffer[47]);
-	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "250 MBPS FIFO Occ", eAccBuffer[48], eAccBuffer[49], eAccBuffer[50], eAccBuffer[51], eAccBuffer[52], eAccBuffer[53], eAccBuffer[54], eAccBuffer[55]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "40 MPBS link Rx FIFO Occ", eAccBuffer[56], eAccBuffer[57], eAccBuffer[58], eAccBuffer[59], eAccBuffer[60], eAccBuffer[61], eAccBuffer[62], eAccBuffer[63]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Byte FIFO 0 Occ", eAccBuffer[0], eAccBuffer[2], eAccBuffer[4], eAccBuffer[6], eAccBuffer[8], eAccBuffer[10], eAccBuffer[12], eAccBuffer[14]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Byte FIFO 1 Occ", eAccBuffer[1], eAccBuffer[3], eAccBuffer[5], eAccBuffer[7], eAccBuffer[9], eAccBuffer[11], eAccBuffer[13], eAccBuffer[15]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS PRBS Err 0", eAccBuffer[16], eAccBuffer[18], eAccBuffer[20], eAccBuffer[22], eAccBuffer[24], eAccBuffer[26], eAccBuffer[28], eAccBuffer[30]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS PRBS Err 1", eAccBuffer[17], eAccBuffer[19], eAccBuffer[21], eAccBuffer[23], eAccBuffer[25], eAccBuffer[27], eAccBuffer[29], eAccBuffer[31]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Symbol Err 0", eAccBuffer[32], eAccBuffer[34], eAccBuffer[36], eAccBuffer[38], eAccBuffer[40], eAccBuffer[42], eAccBuffer[44], eAccBuffer[46]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Symbol Err 1", eAccBuffer[33], eAccBuffer[35], eAccBuffer[37], eAccBuffer[39], eAccBuffer[41], eAccBuffer[43], eAccBuffer[45], eAccBuffer[47]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MBPS FIFO Occ", eAccBuffer[48], eAccBuffer[49], eAccBuffer[50], eAccBuffer[51], eAccBuffer[52], eAccBuffer[53], eAccBuffer[54], eAccBuffer[55]);
 	    printf("\n");
 	    //for(auto& val : lastAccBuffer) printf("%016lx\n", val);
 	    //for(unsigned int i = 0; i < lastAccBuffer.size(); ++i) printf("stuff: 11%02x: %10ld\n", i, lastAccBuffer[i]);
@@ -788,21 +798,21 @@ void ACC::versionCheck(bool debug)
 
 	    if(debug)
 	    {
-		printf("  Header/footer: %4x %4x %4x %4x (%s)\n", buf[0], buf[1], buf[30], buf[31], (buf[0] == 0x1234 && buf[1] == 0xbbbb && buf[30] == 0xbbbb && buf[31] == 0x4321)?"Correct":"Wrong");
+		printf("  Header/footer: %4lx %4lx %4lx %4lx (%s)\n", buf[0], buf[1], buf[30], buf[31], (buf[0] == 0x1234 && buf[1] == 0xbbbb && buf[30] == 0xbbbb && buf[31] == 0x4321)?"Correct":"Wrong");
 		printf("  PLL lock status:\n    ACC PLL:    %d\n    Serial PLL: %d\n    JC PLL:     %d\n    WR PLL:     %d\n", (buf[6] & 0x4)?1:0, (buf[6] & 0x2)?1:0, (buf[6] & 0x8)?1:0, (buf[6] & 0x1)?1:0);
 		printf("  Backpressure:           %8d\n", (buf[5] & 0x2)?1:0);
 		printf("  40 MBPS parity error:   %8d\n", (buf[5] & 0x1)?1:0);
-		printf("  Event count:            %8d\n", (buf[15] << 16) | buf[16]);
-		printf("  ID Frame count:         %8d\n", (buf[17] << 16) | buf[18]);
-		printf("  Trigger count all:      %8d\n", buf[19]);
-		printf("  Trigger count accepted: %8d\n", buf[20]);
-		printf("  PSEC0 FIFO Occ:         %8d\n", buf[21]);
-		printf("  PSEC1 FIFO Occ:         %8d\n", buf[22]);
-		printf("  PSEC2 FIFO Occ:         %8d\n", buf[23]);
-		printf("  PSEC3 FIFO Occ:         %8d\n", buf[24]);
-		printf("  PSEC4 FIFO Occ:         %8d\n", buf[25]);
-		printf("  Wr time FIFO Occ:       %8d\n", buf[26]);
-		printf("  Sys time FIFO Occ:      %8d\n", buf[27]);
+		printf("  Event count:            %8lu\n", (buf[15] << 16) | buf[16]);
+		printf("  ID Frame count:         %8lu\n", (buf[17] << 16) | buf[18]);
+		printf("  Trigger count all:      %8lu\n", buf[19]);
+		printf("  Trigger count accepted: %8lu\n", buf[20]);
+		printf("  PSEC0 FIFO Occ:         %8lu\n", buf[21]);
+		printf("  PSEC1 FIFO Occ:         %8lu\n", buf[22]);
+		printf("  PSEC2 FIFO Occ:         %8lu\n", buf[23]);
+		printf("  PSEC3 FIFO Occ:         %8lu\n", buf[24]);
+		printf("  PSEC4 FIFO Occ:         %8lu\n", buf[25]);
+		printf("  Wr time FIFO Occ:       %8lu\n", buf[26]);
+		printf("  Sys time FIFO Occ:      %8lu\n", buf[27]);
 		printf("\n");
 	    }
             //printf("bufLen: %ld\n", bufLen);
@@ -912,7 +922,7 @@ void ACC::writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn)
 }
 
 /*ID 31: Write function for the parsed data format*/
-void ACC::writePsecData(ofstream& d, vector<int> boardsReadyForRead)
+void ACC::writePsecData(ofstream& d, const vector<int>& boardsReadyForRead)
 {
 	string delim = " ";
 	for(int enm=0; enm<NUM_SAMP; enm++)

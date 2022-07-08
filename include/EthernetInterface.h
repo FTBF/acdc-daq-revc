@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/select.h>
 #include <unistd.h>
 #include <poll.h>
 #include <string>
@@ -28,6 +29,8 @@ private:
     int                     sockfd_;
     struct addrinfo         *servinfo, *p_;
     unsigned char           buff_[MAXBUFLEN_];
+    fd_set rfds_;
+    struct timeval tv_;
     
 public:
 

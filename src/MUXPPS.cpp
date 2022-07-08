@@ -382,7 +382,7 @@ int main()
 					run++;
 				}
 
-				acc.setThreshold(adcstr);
+				//acc.setThreshold(adcstr);
 				acc.setEnableCoin(enableCoin);
 				acc.setSign(invertMode, 4);
 				acc.setPsecChipMask(vec_psec_chip);

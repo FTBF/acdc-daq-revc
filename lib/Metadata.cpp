@@ -18,6 +18,7 @@ Metadata::Metadata()
 
 Metadata::Metadata(vector<unsigned short> acdcBuffer)
 {
+    (void)acdcBuffer;
 	//initializeMetadataKeys();
 	//parseBuffer(acdcBuffer);
 }
@@ -180,7 +181,8 @@ int Metadata::parseBuffer(vector<unsigned short> buffer, unsigned short bi)
 //into metadata map if they already exist. 
 void Metadata::checkAndInsert(string key, unsigned short val)
 {
-
+    (void) key;
+    (void)val;
 }
 
 

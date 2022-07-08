@@ -10,18 +10,18 @@ set(LIBRARY_OUTPUT_PATH ${CMAKE_BINARY_DIR})
 set(LIBRARY_SOURCE_DIR "${CMAKE_SOURCE_DIR}/lib")
 set(EXECUTABLE_SOURCE_DIR "${CMAKE_SOURCE_DIR}/src")
 
-#include(ExternalProject)
-#ExternalProject_Add(project_yaml_cpp
-#        GIT_REPOSITORY "https://github.com/jbeder/yaml-cpp"
-#        GIT_TAG "yaml-cpp-0.6.3"
-#        INSTALL_COMMAND ""
-#        PREFIX ${CMAKE_CURRENT_BINARY_DIR}/yaml-cpp)
-#ExternalProject_Get_Property(project_yaml_cpp source_dir)
-#ExternalProject_Get_Property(project_yaml_cpp binary_dir)
+include(ExternalProject)
+ExternalProject_Add(project_yaml_cpp
+        GIT_REPOSITORY "https://github.com/jbeder/yaml-cpp"
+        GIT_TAG "yaml-cpp-0.6.3"
+        INSTALL_COMMAND ""
+        PREFIX ${CMAKE_CURRENT_BINARY_DIR}/yaml-cpp)
+ExternalProject_Get_Property(project_yaml_cpp source_dir)
+ExternalProject_Get_Property(project_yaml_cpp binary_dir)
 
-#add_library(yaml-cpp SHARED IMPORTED)
-#add_dependencies(yaml-cpp project_yaml_cpp)
-#set_property(TARGET yaml-cpp PROPERTY IMPORTED_LOCATION ${binary_dir}/libyaml-cpp.a)
+add_library(yaml-cpp SHARED IMPORTED)
+add_dependencies(yaml-cpp project_yaml_cpp)
+set_property(TARGET yaml-cpp PROPERTY IMPORTED_LOCATION ${binary_dir}/libyaml-cpp.a)
 
 
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -74,23 +74,23 @@ add_executable(scanLinkPhase ${EXECUTABLE_SOURCE_DIR}/scanLinkPhase.cpp)
 add_executable(basicDAQ ${EXECUTABLE_SOURCE_DIR}/basicDAQ.cpp)
 add_executable(reset ${EXECUTABLE_SOURCE_DIR}/reset.cpp)
 
-target_link_libraries(connectedBoards PUBLIC ACC ethernet)
-target_link_libraries(scanLinkPhase PUBLIC ACC ethernet)
-target_link_libraries(basicDAQ PUBLIC ACC ethernet)
-target_link_libraries(reset PUBLIC ACC ethernet)
-target_link_libraries(configurePLL PUBLIC ACC ethernet)
-target_link_libraries(calibratePed PUBLIC ACC ethernet)
-target_link_libraries(calibrateADC PUBLIC ACC ethernet)
-#target_link_libraries(setPed PUBLIC ACC)
+target_link_libraries(connectedBoards PUBLIC ACC yaml-cpp ethernet)
+target_link_libraries(scanLinkPhase PUBLIC ACC yaml-cpp ethernet)
+target_link_libraries(basicDAQ PUBLIC ACC yaml-cpp ethernet)
+target_link_libraries(reset PUBLIC ACC yaml-cpp ethernet)
+target_link_libraries(configurePLL PUBLIC ACC yaml-cpp ethernet)
+target_link_libraries(calibratePed PUBLIC ACC yaml-cpp ethernet)
+target_link_libraries(calibrateADC PUBLIC ACC yaml-cpp ethernet)
+#target_link_libraries(setPed PUBLIC ACC yaml-cpp)
 target_link_libraries(debug PUBLIC)
-target_link_libraries(listenForData PUBLIC ACC ethernet)
-#target_link_libraries(oscope PUBLIC ACC Scope)
-#target_link_libraries(oscope_py PUBLIC ACC)
-#target_link_libraries(PPS PUBLIC ACC)
-#target_link_libraries(onlyListen PUBLIC ACC Scope)
-#target_link_libraries(onlySetup PUBLIC ACC)
-#target_link_libraries(DataCalibToConfig PUBLIC ACC)
-target_link_libraries(MUXPPS PUBLIC ACC ethernet)
+target_link_libraries(listenForData PUBLIC ACC yaml-cpp ethernet)
+#target_link_libraries(oscope PUBLIC ACC yaml-cpp Scope)
+#target_link_libraries(oscope_py PUBLIC ACC yaml-cpp)
+#target_link_libraries(PPS PUBLIC ACC yaml-cpp)
+#target_link_libraries(onlyListen PUBLIC ACC yaml-cpp Scope)
+#target_link_libraries(onlySetup PUBLIC ACC yaml-cpp)
+#target_link_libraries(DataCalibToConfig PUBLIC ACC yaml-cpp)
+target_link_libraries(MUXPPS PUBLIC ACC yaml-cpp ethernet)
 
 
 

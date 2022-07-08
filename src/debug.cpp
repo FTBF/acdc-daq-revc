@@ -43,6 +43,8 @@ void printReadBuffer(vector<unsigned short> b)
 
 int main(int argc, char *argv[])
 {
+    (void)argc;
+    (void)argv;
 // NEEDS TO BE REWRITTEN FOR ETHERNET INTERFACE	
 //
 //	//number of 16 bit words to allocate memory for usb read

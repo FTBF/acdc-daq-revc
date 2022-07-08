@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <vector>
 #include <map>
+#include "yaml-cpp/yaml.h"
 
 using namespace std;
 
@@ -24,6 +25,7 @@ public:
 	/*--------------------------------Constructor/Deconstructor---------------------------*/
 	/*ID 5: Constructor*/
 	ACC();
+    ACC(const std::string& ip);
 	/*ID 6: Constructor*/
 	~ACC();
 
@@ -49,7 +51,7 @@ public:
 	/*-------------------Sets global variables, see below for description-----------------*/
 	void setNumChCoin(unsigned int in){SELF_number_channel_coincidence = in;} //sets the number of channels needed for self trigger coincidence	
 	void setEnableCoin(int in){SELF_coincidence_onoff = in;} //sets the enable coincidence requirement flag for the self trigger
-	void setThreshold(unsigned int in){SELF_threshold = in;} //sets the threshold for the self trigger
+    void setThresholds(const std::vector<unsigned int>& in){SELF_thresholds = in;} //sets the threshold for the self trigger
 	void setPsecChipMask(vector<int> in){SELF_psec_chip_mask = in;} //sets the PSEC chip mask to set individual chips for the self trigger 
 	void setPsecChannelMask(vector<unsigned int> in){SELF_psec_channel_mask = in;} //sets the PSEC channel mask to set individual channels for the self trigger 
 	void setValidationStart(unsigned int in){validation_start=in;} //sets the validation window start delay for required trigger modes
@@ -74,6 +76,7 @@ public:
 
 	/*------------------------------------------------------------------------------------*/
 	/*-------------------------Local set functions for board setup------------------------*/
+    void parseCfg(const YAML::Node& config);
 	/*ID:9 Create ACDC class instances for each connected ACDC board*/
 	int createAcdcs(); 
 	/*ID 10: Clear all ACDC class instances*/
@@ -87,7 +90,7 @@ public:
 	/*ID 14: Software read function*/
 	int readAcdcBuffers(bool raw = false, string timestamp ="invalidTime"); 
 	/*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
-	int listenForAcdcData(int trigMode, bool raw = false, string timestamp="invalidTime"); 
+    int listenForAcdcData(int trigMode, bool raw = false, const string& timestamp="invalidTime", const string& label=""); 
 	/*ID 16: Used to dis/enable transfer data from the PSEC chips to the buffers*/
 	void enableTransfer(int onoff=0); 
 	/*ID 17: Main init function that controls generalk setup as well as trigger settings*/
@@ -119,7 +122,7 @@ public:
 	/*------------------------------------------------------------------------------------*/
 	/*--------------------------------------Write functions-------------------------------*/
 	void writeErrorLog(string errorMsg); //writes an errorlog with timestamps for debugging
-	void writePsecData(ofstream& d, vector<int> boardsReadyForRead); //main write for the data map
+	void writePsecData(ofstream& d, const vector<int>& boardsReadyForRead); //main write for the data map
 	void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
 
 private:
@@ -138,7 +141,7 @@ private:
 	int trigMode; //var: decides the triggermode
 	int metaSwitch = 0;
 	unsigned int SELF_number_channel_coincidence; //var: number of channels required in coincidence for the self trigger
-	unsigned int SELF_threshold; //var: threshold for the selftrigger
+    std::vector<unsigned int> SELF_thresholds; //var: thresholds for the selftrigger
 	unsigned int validation_start;
 	unsigned int validation_window; //var: validation window for some triggermodes
 	unsigned int PPSRatio;

@@ -10,8 +10,10 @@ using namespace std;
 
 int main(int argn, char * argv[])
 {
-	ACC acc;
+    (void)argv;
 
-	if(argn > 1) acc.versionCheck(true);
-	else         acc.versionCheck(false);
+    ACC acc;
+
+    if(argn > 1) acc.versionCheck(true);
+    else         acc.versionCheck(false);
 }

@@ -18,6 +18,8 @@ using namespace std;
 
 int main(int argn, char * argc[])
 {
+    (void)argc;
+
     ACDC acdc;
 
     EthernetInterface eth("192.168.46.108", "2007");
@@ -33,13 +35,10 @@ int main(int argn, char * argc[])
 //    
 //    usleep(1000);
 //    
-//    // reset ACDC
-//    if(!usb->sendData(0xffff0000))
-//    {
-//    	printf("Send Error!!!\n");
-//    }
-//    
-//    usleep(1000);
+    // reset ACDC
+    eth.send(0x100, 0xffff0000);
+    
+    usleep(1000);
 
     // Enable ACDC data output IDLE
     //eth.send(0x100, 0xFFF60000);
@@ -75,11 +74,11 @@ int main(int argn, char * argc[])
     }
 
     //set self trigger mask
-    eth.send(0x100, 0xffb10000);
-    eth.send(0x100, 0xffb1101f);
-    eth.send(0x100, 0xffb1201f);
-    eth.send(0x100, 0xffb1301f);
-    eth.send(0x100, 0xffb14000);
+    eth.send(0x100, 0xffb1003f);
+    eth.send(0x100, 0xffb1103f);
+    eth.send(0x100, 0xffb1203f);
+    eth.send(0x100, 0xffb1303f);
+    eth.send(0x100, 0xffb1403f);
 
     // set trig mode 2 in ACC (HARDWARE TRIG)
     for(int i = 0; i < 8; ++i) eth.send(0x0030 + i, 0);
@@ -151,8 +150,6 @@ int main(int argn, char * argc[])
 		    printf("%7d : ", i);
 		    for(int k = 0; k < 5; ++k)
 		    {
-                        if(parsedData[k*6 + 0][i] < thresh or parsedData[k*6 + 1][i] < thresh or parsedData[k*6 + 2][i] < thresh or parsedData[k*6 + 3][i] < thresh or parsedData[k*6 + 4][i] < thresh or parsedData[k*6 + 5][i] < thresh)printf("AAA");
-                        if(parsedData[k*6 + 0][i] < thresh or parsedData[k*6 + 1][i] < thresh or parsedData[k*6 + 2][i] < thresh or parsedData[k*6 + 3][i] < thresh or parsedData[k*6 + 4][i] < thresh or parsedData[k*6 + 5][i] < thresh)printf("---");
 			printf("%6x%6x%6x%6x%6x%6x ",
 			       parsedData[k*6 + 0][i],
 			       parsedData[k*6 + 1][i],
@@ -166,7 +163,7 @@ int main(int argn, char * argc[])
 	    }
 
 
-	    bufferOcc = 0;//eth.recieve(0x1130+i);
+	    bufferOcc = eth.recieve(0x1130+i);
         }
         
 

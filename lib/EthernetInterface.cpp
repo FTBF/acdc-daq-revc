@@ -31,6 +31,9 @@ EthernetInterface::EthernetInterface(std::string ip, std::string port) : sockfd_
 	fprintf(stderr, "sw: failed to create socket\n");
     }
 
+    FD_ZERO(&rfds_);
+    FD_SET(sockfd_, &rfds_);
+
 }
 
 EthernetInterface::~EthernetInterface()
@@ -141,15 +144,31 @@ uint64_t EthernetInterface::recieve(uint64_t addr, uint8_t flags)
     socklen_t addr_len = sizeof(their_addr);
 
     // read response ///////////////////////////////////////////////////////////
-    if((numbytes = recvfrom(sockfd_,
-			    buff_,
-			    MAXBUFLEN_ - 1,
-			    0,
-			    (struct sockaddr*)&their_addr,
-			    &addr_len)) == -1)
+    tv_ = {0, 250000};  // 0 seconds and 250000 useconds
+    int retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
+
+    if(retval > 0)
     {
-	perror("recvfrom");
-	exit(1);
+        if((numbytes = recvfrom(sockfd_,
+                                buff_,
+                                MAXBUFLEN_ - 1,
+                                0,
+                                (struct sockaddr*)&their_addr,
+                                &addr_len)) == -1)
+        {
+            perror("recvfrom");
+            exit(1);
+        }
+    }
+    else if(retval == 0)
+    {
+        printf("Timeout\n");
+        exit(1);
+    }
+    else
+    {
+        perror("select()");
+        exit(1);
     }
 
     uint64_t data;
@@ -226,31 +245,48 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
     while(wordsRead < numwords)
     {
         // read response ///////////////////////////////////////////////////////////
-        if((numbytes = recvfrom(sockfd_,
-                                buff_,
-                                MAXBUFLEN_ - 1,
-                                0,
-                                (struct sockaddr*)&their_addr,
-                                &addr_len)) == -1)
+        tv_ = {0, 250000};  // 0 seconds and 250000 useconds
+        int retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
+
+        if(retval > 0)
         {
-            perror("recvfrom");
+            if((numbytes = recvfrom(sockfd_,
+                                    buff_,
+                                    MAXBUFLEN_ - 1,
+                                    0,
+                                    (struct sockaddr*)&their_addr,
+                                    &addr_len)) == -1)
+            {
+                perror("recvfrom");
+                exit(1);
+            }
+            //if(!wordsRead && (buff_[0] & 0x7) != 1) printf("Next packet not start of burst!\n"); 
+
+            for (int i = 0; i < (numbytes-2)/8; ++i)
+            {
+                if(i+wordsRead < numwords)
+                {
+                    memcpy((void*)(data.data()+i+wordsRead), (void*)&buff_[TX_DATA_OFFSET_ + 8*i], 8);
+                }
+                else
+                {
+                    break;
+                }
+            }
+        
+            wordsRead += (numbytes-2)/8;
+        }
+        else if(retval == 0)
+        {
+            printf("Timeout\n");
             exit(1);
         }
-        //if(!wordsRead && (buff_[0] & 0x7) != 1) printf("Next packet not start of burst!\n"); 
-
-        for (int i = 0; i < (numbytes-2)/8; ++i)
+        else
         {
-            if(i+wordsRead < numwords)
-            {
-                memcpy((void*)(data.data()+i+wordsRead), (void*)&buff_[TX_DATA_OFFSET_ + 8*i], 8);
-            }
-            else
-            {
-                break;
-            }
+            perror("select()");
+            exit(1);
         }
-        
-        wordsRead += (numbytes-2)/8;
+
     }
 	
     return data;
