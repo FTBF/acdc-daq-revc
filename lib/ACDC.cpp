@@ -9,9 +9,21 @@
 
 using namespace std;
 
-ACDC::ACDC(){}
+ACDC::ACDC() {}
+
+ACDC::ACDC(int bi) : boardIndex(bi) {}
 
 ACDC::~ACDC(){}
+
+ACDC::ConfigParams::ConfigParams() :
+    reset(false),
+    pedestals(0x800, 5),
+    selfTrigPolarity(0),
+    triggerThresholds(0x780, 30),
+    selfTrigMask(0x3f, 5),
+    calibMode(false)
+{
+}
 
 int ACDC::getBoardIndex()
 {
@@ -21,6 +33,41 @@ int ACDC::getBoardIndex()
 void ACDC::setBoardIndex(int bi)
 {
 	boardIndex = bi;
+}
+
+void ACDC::parseConfig(const YAML::Node& config)
+{
+    if(config["resetACDCOnStart"]) params_.reset = config["resetACDCOnStart"].as<bool>();
+    if(config["pedestals"])
+    {
+        if(config["pedestals"].IsScalar())
+        {
+            params_.pedestals = std::vector<unsigned int>(config["pedestals"].as<unsigned int>(), 5);
+        }
+        else if(config["pedestals"].IsSequence())
+        {
+            params_.pedestals = config["pedestals"].as<std::vector<unsigned int>>();
+            if(params_.pedestals.size() != 5)
+            {
+                //acc.writeErrorLog("Incorrect pedestal configuration");
+            }
+        }
+    }
+    if(config["selfTrigPolarity"]) params_.selfTrigPolarity = config["selfTrigPolarity"].as<int>();
+    if(config["selfTrigThresholds"])
+    {
+        if(config["selfTrigThresholds"].IsScalar())
+        {
+            params_.triggerThresholds = std::vector<unsigned int>(30, config["selfTrigThresholds"].as<unsigned int>());
+        }
+        else if(config["selfTrigThresholds"].IsSequence())
+        {
+            params_.triggerThresholds = config["selfTrigThresholds"].as<std::vector<unsigned int>>();
+        }
+    }
+    if(config["selfTrigMask"]) params_.selfTrigMask = config["selfTrigMask"].as<std::vector<unsigned int>>();
+    if(config["calibMode"]) params_.calibMode = config["calibMode"].as<bool>();
+
 }
 
 //looks at the last ACDC buffer and organizes

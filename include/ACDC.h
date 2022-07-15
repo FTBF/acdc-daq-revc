@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include "yaml-cpp/yaml.h"
 #include "Metadata.h" //load metadata class
 
 using namespace std;
@@ -19,6 +20,7 @@ class ACDC
 {
 public:
 	ACDC(); //constructor
+	ACDC(int bi); //constructor
 	~ACDC(); //deconstructor
 
 	//----------local return functions
@@ -32,11 +34,26 @@ public:
 	//----------local set functions
 	void setBoardIndex(int bi); // set the board index for the current acdc
 
+    void parseConfig(const YAML::Node& config);
+
 	//----------parse function for data stream 
 	int parseDataFromBuffer(const vector<uint64_t>& buffer); //parses only the psec data component of the ACDC buffer
 
 	//----------write data to file
 	void writeErrorLog(string errorMsg); //write errorlog with timestamps
+
+    class ConfigParams
+    {
+    public:
+        ConfigParams();
+
+        bool reset;
+        std::vector<unsigned int> pedestals;
+        int selfTrigPolarity;
+        std::vector<unsigned int> triggerThresholds;
+        std::vector<unsigned int> selfTrigMask;
+        bool calibMode;
+    } params_;
 
 private:
 	//----------all neccessary classes

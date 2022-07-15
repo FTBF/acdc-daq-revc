@@ -31,8 +31,6 @@ public:
 
 	/*------------------------------------------------------------------------------------*/
 	/*--------------------------------Local return functions------------------------------*/
-	/*ID Nan: Returns vector of aligned ACDC indices*/
-	vector<int> getAlignedIndices(){return alignedAcdcIndices;}
 	/*ID Nan: Returns set triggermode */
 	int getTriggermode(){return trigMode;} 
 	/*ID Nan: Returns the data map*/
@@ -49,52 +47,32 @@ public:
 	/*------------------------------------------------------------------------------------*/
 	/*-------------------------Local set functions for board setup------------------------*/
 	/*-------------------Sets global variables, see below for description-----------------*/
-	void setNumChCoin(unsigned int in){SELF_number_channel_coincidence = in;} //sets the number of channels needed for self trigger coincidence	
-	void setEnableCoin(int in){SELF_coincidence_onoff = in;} //sets the enable coincidence requirement flag for the self trigger
-    void setThresholds(const std::vector<unsigned int>& in){SELF_thresholds = in;} //sets the threshold for the self trigger
-	void setPsecChipMask(vector<int> in){SELF_psec_chip_mask = in;} //sets the PSEC chip mask to set individual chips for the self trigger 
-	void setPsecChannelMask(vector<unsigned int> in){SELF_psec_channel_mask = in;} //sets the PSEC channel mask to set individual channels for the self trigger 
 	void setValidationStart(unsigned int in){validation_start=in;} //sets the validation window start delay for required trigger modes
 	void setValidationWindow(unsigned int in){validation_window=in;} //sets the validation window length for required trigger modes
 	void setTriggermode(int in){trigMode = in;} //sets the overall triggermode
-	void setSign(int in, int source) //sets the sign (normal or inverted) for chosen source
-	{
-		if(source==2)
-		{
-			ACC_sign = in;
-		}else if(source==3)
-		{
-			ACDC_sign = in;
-		}else if(source==4)
-		{
-			SELF_sign = in;
-		}
-	}
-	void setPPSRatio(unsigned int in){PPSRatio = in;} 
-	void setPPSBeamMultiplexer(int in){PPSBeamMultiplexer = in;} 
+//	void setPPSRatio(unsigned int in){PPSRatio = in;} 
+//	void setPPSBeamMultiplexer(int in){PPSBeamMultiplexer = in;} 
 	void setMetaSwitch(int in){metaSwitch = in;}
 
 	/*------------------------------------------------------------------------------------*/
 	/*-------------------------Local set functions for board setup------------------------*/
-    void parseCfg(const YAML::Node& config);
+    void parseConfig(const YAML::Node& config);
 	/*ID:9 Create ACDC class instances for each connected ACDC board*/
 	int createAcdcs(); 
 	/*ID 10: Clear all ACDC class instances*/
 	void clearAcdcs(); 
 	/*ID:11 Queries the ACC for information about connected ACDC boards*/
-	int whichAcdcsConnected(); 
+    std::vector<int> whichAcdcsConnected(); 
 	/*ID 12: Set up the software trigger*/
 	void setSoftwareTrigger(unsigned int boardMask); 
 	/*ID 13: Fires the software trigger*/
 	void softwareTrigger(); 
-	/*ID 14: Software read function*/
-	int readAcdcBuffers(bool raw = false, string timestamp ="invalidTime"); 
-	/*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
-    int listenForAcdcData(int trigMode, bool raw = false, const string& timestamp="invalidTime", const string& label=""); 
+	/*ID 15: Main listen fuction for data readout*/
+    int listenForAcdcData(const string& timestamp="invalidTime"); 
 	/*ID 16: Used to dis/enable transfer data from the PSEC chips to the buffers*/
 	void enableTransfer(int onoff=0); 
 	/*ID 17: Main init function that controls generalk setup as well as trigger settings*/
-	int initializeForDataReadout(int trigMode = 0,unsigned int boardMask = 0xFF, int calibMode = 0); 
+    int initializeForDataReadout(const YAML::Node& config);
 	/*ID 18: Tells ACDCs to clear their ram.*/ 	
 	void dumpData(unsigned int boardMask); 
 	/*ID 19: Pedestal setting procedure.*/
@@ -114,9 +92,9 @@ public:
         /*ID 26: Configure the jcPLL settings */
 	void configJCPLL(unsigned int boardMask = 0xff);
         /*ID 27: Turn off triggers and data transfer off */
-	void endRun(unsigned int boardMask = 0xff);
+	void endRun();
 	//:::
-	void resetACDC(); //resets the acdc boards
+	void resetACDC(unsigned int boardMask = 0xff); //resets the acdc boards
 	void resetACC(); //resets the acdc boards 
 
 	/*------------------------------------------------------------------------------------*/
@@ -125,31 +103,38 @@ public:
 	void writePsecData(ofstream& d, const vector<int>& boardsReadyForRead); //main write for the data map
 	void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
 
+    class ConfigParams
+    {
+    public:
+        ConfigParams();
+
+        bool rawMode;
+        int eventNumber;
+        int triggerMode;
+        unsigned int boardMask;
+        std::string label;
+        bool reset;
+        int accTrigPolarity;
+        int validationStart;
+        int validationWindow;
+    } params_;
+
 private:
 	/*------------------------------------------------------------------------------------*/
 	/*---------------------------------Load neccessary classes----------------------------*/
         EthernetInterface eth, eth_burst;
 	Metadata meta; //calls the metadata class for file write
-	vector<ACDC*> acdcs; //a vector of active acdc boards. 
+    std::vector<ACDC> acdcs; //a vector of active acdc boards. 
 
 	//----------all neccessary global variables
 	bool usbcheck;
-	int ACC_sign; //var: ACC sign (normal or inverted)
-	int ACDC_sign; //var: ACDC sign (normal or inverted)
-	int SELF_sign; //var: self trigger sign (normal or inverted)
-	int SELF_coincidence_onoff; //var: flag to enable self trigger coincidence
 	int trigMode; //var: decides the triggermode
 	int metaSwitch = 0;
-	unsigned int SELF_number_channel_coincidence; //var: number of channels required in coincidence for the self trigger
-    std::vector<unsigned int> SELF_thresholds; //var: thresholds for the selftrigger
 	unsigned int validation_start;
 	unsigned int validation_window; //var: validation window for some triggermodes
 	unsigned int PPSRatio;
 	int PPSBeamMultiplexer;
 //	vector<unsigned short> lastAccBuffer; //most recently received ACC buffer
-	vector<int> alignedAcdcIndices; //number relative to ACC index (RJ45 port) corresponds to the connected ACDC boards
-	vector<unsigned int> SELF_psec_channel_mask; //var: PSEC channels active for self trigger
-	vector<int> SELF_psec_chip_mask; //var: PSEC chips actove for self trigger
 	map<int, map<int, vector<unsigned short>>> map_data; //entire data map | index: board < channel < samplevector
 	map<int,vector<unsigned short>> map_meta; //entire meta map | index: board < metakey < value
 	vector<uint64_t> vbuffer;

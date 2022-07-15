@@ -1,0 +1,21 @@
+basicConfig:
+  DAQSettings:
+    ip : 192.168.46.108
+    fileLabel : testData
+    resetACCOnStart : false
+    resetACDCOnStart : false
+    triggerMode : 4
+    ACDCMask : 0xff
+    calibMode : false
+    humanReadableData : false
+    nevents : 100
+    pedestals : 0x800
+    selfTrigThresholds : 0x900
+    selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+
+    ACDC0:
+      selfTrigThresholds : 0x900
+      selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+    ACDC3:
+      selfTrigThresholds : 0x900
+      selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]

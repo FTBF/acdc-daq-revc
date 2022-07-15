@@ -162,7 +162,7 @@ uint64_t EthernetInterface::recieve(uint64_t addr, uint8_t flags)
     }
     else if(retval == 0)
     {
-        printf("Timeout\n");
+        printf("Read Timeout\n");
         exit(1);
     }
     else
@@ -278,7 +278,7 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
         }
         else if(retval == 0)
         {
-            printf("Timeout\n");
+            printf("Burst Read Timeout\n");
             exit(1);
         }
         else

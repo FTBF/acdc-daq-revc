@@ -41,51 +41,74 @@ ACC::~ACC()
 {
 }
 
+ACC::ConfigParams::ConfigParams() :
+    rawMode(true),
+    eventNumber(100),
+    triggerMode(1),
+    boardMask(0xff),
+    label("testData"),
+    reset(false),
+    accTrigPolarity(0),
+    validationStart(0),
+    validationWindow(0)
+{
+}
 
 /*------------------------------------------------------------------------------------*/
 /*---------------------------Setup functions for ACC/ACDC-----------------------------*/
 
-void ACC::parseCfg(const YAML::Node& config)
+void ACC::parseConfig(const YAML::Node& config)
 {
-    
-    //initializeForDataReadout(int trigMode, unsigned int boardMask, int calibMode);    
+    if(config["humanReadableData"]) params_.rawMode = !config["humanReadableData"].as<bool>();
+
+    params_.eventNumber = config["nevents"].as<int>();
+    params_.triggerMode = config["triggerMode"].as<int>();
+
+    params_.boardMask = config["ACDCMask"].as<unsigned int>();
+	
+    if(config["fileLabel"]) params_.label = config["fileLabel"].as<std::string>();
+
+    if(config["resetACCOnStart"]) params_.reset = config["resetACCOnStart"].as<bool>();
+
+    if(config["accTrigPolarity"]) params_.accTrigPolarity = config["accTrigPolarity"].as<int>();
+
+    if(config["validationStart"])  params_.validationStart = config["validationStart"].as<int>();
+    if(config["validationWindow"]) params_.validationWindow = config["validationWindow"].as<int>();
 }
 
 /*ID:9 Create ACDC class instances for each connected ACDC board*/
 int ACC::createAcdcs()
 {
 	//Check for connected ACDC boards
-	int retval = whichAcdcsConnected(); 
-	if(retval==-1)
+	std::vector<int> connectedBoards = whichAcdcsConnected(); 
+	if(connectedBoards.size() == 0)
 	{
 		std::cout << "Trying to reset ACDC boards" << std::endl;
 		eth.send(0x100, 0xFFFF0000);
 		usleep(10000);
-		int retval = whichAcdcsConnected();
-		if(retval==-1)
+		connectedBoards = whichAcdcsConnected();
+		if(connectedBoards.size() == 0)
 		{
 			std::cout << "After ACDC reset no changes, still no boards found" << std::endl;
 		}
 	}
 
 	//if there are no ACDCs, return 0
-	if(alignedAcdcIndices.size() == 0)
+	if(connectedBoards.size() == 0)
 	{
 		writeErrorLog("No aligned ACDC indices");
 		return 0;
 	}
 	
-	//Clear the ACDC class vector if one exists
-	clearAcdcs();
+	//Clear the ACDC class map if one exists
+	acdcs.clear();
 
 	//Create ACDC objects with their board numbers
-	//loaded into alignedAcdcIndices in the last function call. 
-	for(int bi: alignedAcdcIndices)
+	for(int bi: connectedBoards)
 	{
-		ACDC* temp = new ACDC();
-		temp->setBoardIndex(bi);
-		acdcs.push_back(temp);
+		acdcs.emplace_back(bi);
 	}
+
 	if(acdcs.size()==0)
 	{
 		writeErrorLog("No ACDCs created even though there were boards found!");
@@ -96,9 +119,8 @@ int ACC::createAcdcs()
 }
 
 /*ID:11 Queries the ACC for information about connected ACDC boards*/
-int ACC::whichAcdcsConnected()
+std::vector<int> ACC::whichAcdcsConnected()
 {
-	int retval=0;
 	unsigned int command;
 	vector<int> connectedBoards;
 
@@ -123,26 +145,26 @@ int ACC::whichAcdcsConnected()
 			connectedBoards.push_back(i);
 		}
 	}
-	if(connectedBoards.size()==0 || retval==-1)
-	{
-		return -1;
-	}
 
-	//this allows no vector clearing to be needed
-	alignedAcdcIndices = connectedBoards;
-	cout << "Connected Boards: " << alignedAcdcIndices.size() << endl;
-	return 1;
+	cout << "Connected Boards: " << connectedBoards.size() << endl;
+	return connectedBoards;
 }
 
 /*ID 17: Main init function that controls generalk setup as well as trigger settings*/
-int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int calibMode)
+int ACC::initializeForDataReadout(const YAML::Node& config)
 {
 	unsigned int command;
 	int retval;
 
-	std::cout << "Received board mask: ";
-	printf("0x%02x\n", boardMask);
-	
+        //read ACC parameters from cfg file
+        parseConfig(config);
+
+        if(params_.reset) 
+        {
+            resetACC();
+            usleep(5000);
+        }
+
 	// Creates ACDCs for readout
 	retval = createAcdcs();
 	if(retval==0)
@@ -150,22 +172,50 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
             writeErrorLog("ACDCs could not be created");
 	}
 
+	std::cout << "Received board mask: ";
+	printf("0x%02x\n", params_.boardMask);
+		
         //check ACDC PLL Settings
         // REVIEW ERRORS AND MESSAGES 
-        for(int bi: alignedAcdcIndices)
+        for(ACDC& acdc : acdcs)
 	{
-            // read ACDC info frame 
-            eth.send(0x100, 0x00D00000 | (1 << (bi + 24)));
+            //parse general ACDC settings
+            acdc.parseConfig(config);
 
-            std::vector<uint64_t> acdcInfo = eth.recieve_many(0x1200 + bi, 32, EthernetInterface::NO_ADDR_INC);
-            if((acdcInfo[0] & 0xffff) != 0x1234)
+            //parse ACDC specific settings
+            if(config["ACDC" + std::to_string(acdc.getBoardIndex())])
             {
-                std::cout << "ACDC" << bi << " has invalid info frame" << std::endl;
+                acdc.parseConfig(config["ACDC" + std::to_string(acdc.getBoardIndex())]);
             }
 
-            if(!(acdcInfo[6] & 0x4)) std::cout << "ACDC" << bi << " has unlocked ACC pll" << std::endl;
-            if(!(acdcInfo[6] & 0x2)) std::cout << "ACDC" << bi << " has unlocked serial pll" << std::endl;
-            if(!(acdcInfo[6] & 0x1)) std::cout << "ACDC" << bi << " has unlocked white rabbit pll" << std::endl;
+            //reset if requested
+            if(acdc.params_.reset) resetACDC(1 << acdc.getBoardIndex());
+            
+            // read ACDC info frame 
+            eth.send(0x100, 0x00D00000 | (1 << (acdc.getBoardIndex() + 24)));
+
+            //wait until we have fully received all 32 expected words from the ACDC
+            int iTimeout = 10;
+            while(eth.recieve(0x1138+acdc.getBoardIndex()) < 32 && iTimeout > 0)
+            {
+                usleep(10);
+                ++iTimeout;
+            }
+            if(iTimeout == 0) 
+            {
+                std::cout << "ERROR: ACDC info frame retrieval timeout" << std::endl;
+                exit(1);
+            }
+
+            std::vector<uint64_t> acdcInfo = eth.recieve_many(0x1200 + acdc.getBoardIndex(), 32, EthernetInterface::NO_ADDR_INC);
+            if((acdcInfo[0] & 0xffff) != 0x1234)
+            {
+                std::cout << "ACDC" << acdc.getBoardIndex() << " has invalid info frame" << std::endl;
+            }
+
+            if(!(acdcInfo[6] & 0x4)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked ACC pll" << std::endl;
+            if(!(acdcInfo[6] & 0x2)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked serial pll" << std::endl;
+            if(!(acdcInfo[6] & 0x1)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked white rabbit pll" << std::endl;
 
             if(!(acdcInfo[6] & 0x8))
             {
@@ -178,17 +228,18 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
 
                 // check PLL bit again
                 // read ACD info frame 
-                eth.send(0x100, 0x00D00000 | (1 << (bi + 24)));
+                eth.send(0x100, 0x00D00000 | (1 << (acdc.getBoardIndex() + 24)));
 
-                acdcInfo = eth.recieve_many(0x1200 + bi, 32, EthernetInterface::NO_ADDR_INC);
+                acdcInfo = eth.recieve_many(0x1200 + acdc.getBoardIndex(), 32, EthernetInterface::NO_ADDR_INC);
                 if((acdcInfo[0] & 0xffff) != 0x1234)
                 {
-                    std::cout << "ACDC" << bi << " has invalid info frame" << std::endl;
+                    std::cout << "ACDC" << acdc.getBoardIndex() << " has invalid info frame" << std::endl;
                 }
                 
-                if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(bi) + " has unlocked sys pll");
+                if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
             }
-	}
+
+        }
 
 
 	//disable all triggers
@@ -200,102 +251,111 @@ int ACC::initializeForDataReadout(int trigMode, unsigned int boardMask, int cali
         //disable data transmission
         enableTransfer(0); 
 
-	// Toogels the calibration mode on if requested
-	toggleCal(calibMode, 0x7FFF, boardMask);
-
 	//train manchester links
 	eth.send(0x0060, 0);
 	usleep(250);
 
         //scan hs link phases and pick optimal phase
-        scanLinkPhase(boardMask);
+        scanLinkPhase(params_.boardMask);
+
+        // Toogels the calibration mode on if requested
+	for(ACDC& acdc : acdcs) 
+        {
+            unsigned int acdcMask = 1 << acdc.getBoardIndex();
+            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFF, acdcMask);
+        }
 
 	// Set trigger conditions
-	switch(trigMode)
+	switch(params_.triggerMode)
 	{ 	
 		case 0: //OFF
 			writeErrorLog("Trigger source turned off");	
 			break;
 		case 1: //Software trigger
-                        setHardwareTrigSrc(trigMode,boardMask);
+                        setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			break;
 		case 2: //Self trigger
-			setHardwareTrigSrc(trigMode,boardMask);
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			goto selfsetup;
 		case 3: //Self trigger with validation 
-			setHardwareTrigSrc(trigMode,boardMask);
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
                         //timeout 
 			command = 0x00B20000;
-			command = (command | (boardMask << 24)) | 40;
+			command = (command | (params_.boardMask << 24)) | 40;
 			eth.send(0x100, command);
 			break;
                 case 4:
-			setHardwareTrigSrc(trigMode,boardMask);
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			break;
 		case 5: //Self trigger with SMA validation on ACC
- 			setHardwareTrigSrc(trigMode,boardMask);
-                        eth.send(0x0038, ACC_sign);
+ 			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+                        eth.send(0x0038, params_.accTrigPolarity);
 
-                        eth.send(0x0039, validation_start);
+                        eth.send(0x0039, params_.validationStart);
 			
-                        eth.send(0x003a, validation_window);
+                        eth.send(0x003a, params_.validationWindow);
 			
                         //eth.send(0x003b, PPSBeamMultiplexer);
 			
 			goto selfsetup;
 			break;
 		default: // ERROR case
-			writeErrorLog("Trigger source Error");	
+			writeErrorLog("Trigger mode unrecognizes Error");	
 			break;
 		selfsetup:
  			command = 0x00B10000;
 			
-			printf("%s","Channel-Mask: ");
-			for(unsigned int k: SELF_psec_channel_mask){printf("0x%02x\t",k);}
-			printf("\n");
-			
-			if(5!=SELF_psec_channel_mask.size())
-			{
-				writeErrorLog("PSEC mask error");	
-			}
-			
-			std::vector<unsigned int> CHIPMASK = {0x00000000,0x00001000,0x00002000,0x00003000,0x00004000};
-			for(int i=0; i<(int)SELF_psec_channel_mask.size(); i++)
-			{		
-				command = 0x00B10000;
-				command = (command | (boardMask << 24)) | CHIPMASK[i] | SELF_psec_channel_mask[i]; printf("Mask: 0x%08x\n",command);
-				eth.send(0x100, command);
-			}
-			
-			command = 0x00B16000;
-			command = (command | (boardMask << 24)) | SELF_sign;
-                        eth.send(0x100, command);
-			command = 0x00B15000;
-			command = (command | (boardMask << 24)) | SELF_number_channel_coincidence;
-                        eth.send(0x100, command);
-			command = 0x00B18000;
-			command = (command | (boardMask << 24)) | SELF_coincidence_onoff;
-                        eth.send(0x100, command);
-                        if(SELF_thresholds.size() >= 30)
+                        for(ACDC& acdc : acdcs)
                         {
-                            for(int iChip = 0; iChip < 5; ++iChip)
+                            //skip ACDC if it is not included in boardMask
+                            unsigned int acdcMask = 1 << acdc.getBoardIndex();
+                            if(!(params_.boardMask & acdcMask)) continue;
+
+                            if(acdc.params_.selfTrigMask.size() != 5)
                             {
-                                for(int iChan = 0; iChan < 6; ++iChan)
+                                writeErrorLog("PSEC trigger mask error");	
+                            }
+			
+                            std::vector<unsigned int> CHIPMASK = {0x00000000,0x00001000,0x00002000,0x00003000,0x00004000};
+                            for(int i=0; i<(int)acdc.params_.selfTrigMask.size(); i++)
+                            {		
+				command = 0x00B10000;
+				command = (command | (acdcMask << 24)) | CHIPMASK[i] | acdc.params_.selfTrigMask[i]; 
+                                printf("%x\n", command);
+				eth.send(0x100, command);
+                            }
+			
+                            command = 0x00B16000;
+                            command = (command | (acdcMask << 24)) | acdc.params_.selfTrigPolarity;
+                            eth.send(0x100, command);
+//                            command = 0x00B15000;
+//                            command = (command | (acdcMask << 24)) | SELF_number_channel_coincidence;
+//                            eth.send(0x100, command);
+//                            command = 0x00B18000;
+//                            command = (command | (acdcMask << 24)) | SELF_coincidence_onoff;
+//                            eth.send(0x100, command);
+
+                            if(acdc.params_.triggerThresholds.size() == 30)
+                            {
+                                for(int iChip = 0; iChip < 5; ++iChip)
                                 {
-                                    command = 0x00A60000;
-                                    command = ((command + (iChan << 16)) | (boardMask << 24)) | (iChip << 12) | SELF_thresholds[6*iChip + iChan];
-                                    eth.send(0x100, command);
+                                    for(int iChan = 0; iChan < 6; ++iChan)
+                                    {
+                                        command = 0x00A60000;
+                                        command = ((command + (iChan << 16)) | (acdcMask << 24)) | (iChip << 12) | acdc.params_.triggerThresholds[6*iChip + iChan];
+                                        eth.send(0x100, command);
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            // thorw some form of error here
+                            else
+                            {
+                                writeErrorLog("Incorrect number of trigger thresholds: " + std::to_string(acdc.params_.triggerThresholds.size()));
+                            }
                         }
 	}
 
         //flush data FIFOs
-	dumpData(boardMask);
+	dumpData(params_.boardMask);
 
 	//Enables the transfer of data from ACDC to ACC
 	eth_burst.setBurstTarget();
@@ -369,159 +429,24 @@ void ACC::toggleCal(int onoff, unsigned int channelmask, unsigned int boardMask)
 	{
 		//channelmas is default 0x7FFF
 		command = (command | (boardMask << 24)) | channelmask;
+                eth.send(0x100, 0x00c10001 | (boardMask << 24));
 	}else if(onoff == 0)
 	{
 		command = (command | (boardMask << 24));
+                eth.send(0x100, 0x00c10000 | (boardMask << 24));
 	}
         eth.send(0x100, command);
+
+
 }
 
 
 /*------------------------------------------------------------------------------------*/
 /*---------------------------Read functions listening for data------------------------*/
 
-/*ID 14: Software read function*/
-int ACC::readAcdcBuffers(bool raw, string timestamp)
-{
-	bool corruptBuffer;
-	vector<int> boardsReadyForRead;
-	map<int,int> readoutSize;
-	unsigned int command;
-	int maxCounter=0;
-	bool clearCheck;
-
-	//filename logistics
-	string outfilename = "./Results/";
-	string datafn;
-	ofstream dataofs;
-
-	//Enables the transfer of data from ACDC to ACC
-   	//enableTransfer(1);
-        //eth_burst.setBurstTarget();
-        //eth.setBurstMode(true);
-
-        
-	std::cout << "Start looking for trigger conditions" << std::endl;
-	while(true)
-	{
-		boardsReadyForRead.clear();
-		readoutSize.clear();
-		//Request the ACC info frame to check data FIFOs
-                std::vector<uint64_t> fifoOcc = eth.recieve_many(0x1130, 8);
-                
-		for(int k=0; k<MAX_NUM_BOARDS; k++)
-		{
-                      if(fifoOcc[k]>=PSECFRAME)
-                      {
-                          boardsReadyForRead.push_back(k);
-                          readoutSize[k] = PSECFRAME;
-                      }
-		}
-
-		//old trigger
-		if(boardsReadyForRead==alignedAcdcIndices)
-		{
-			break;
-		}
-
-		maxCounter++;
-		if(maxCounter>5000)
-		{
-			std::cout << "Failed to find a trigger condition" << std::endl;
-			return 2;
-		}
-	}
-	std::cout << "Trigger condition found starting to read data" << std::endl;
-	for(int bi: boardsReadyForRead)
-	{
-		std::cout << "Start reading board " << bi << std::endl;
-		//base command for set readmode and which board bi to read
-                eth.send(0x22, bi);
-
-                std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
-
-		//Handles buffers =/= 7795 words
-		if(acdc_data.size() != 1541)
-		{
-			string err_msg = "Couldn't read ";
-			err_msg += to_string(1540);
-			err_msg += " words as expected! Tryingto fix it! Size was: ";
-			err_msg += to_string(acdc_data.size());
-			writeErrorLog(err_msg);
-			return 1;
-		}
-		
-		//save this buffer a private member of ACDC
-		//by looping through our acdc vector
-		//and checking each index 
-		for(ACDC* a: acdcs)
-		{
-			if(a->getBoardIndex() == bi)
-			{
-				int retval;
-
-				//If raw data is requested save and return 0
-				if(raw==true)
-				{
-                                    //vbuffer = acdc_data;
-					string rawfn = outfilename + "Raw_" + timestamp + "_b" + to_string(bi) + ".txt";
-					writeRawDataToFile(acdc_data, rawfn);
-					break;
-				}
-                                else
-				{
-					retval = a->parseDataFromBuffer(acdc_data); 
-					//corruptBuffer = meta.parseBuffer(acdc_buffer);
-					//if(corruptBuffer)
-					//{
-					//	writeErrorLog("Metadata error not parsed correctly");
-					//	return 1;
-					//}
-//					meta.checkAndInsert("Board", bi);
-//					map_meta[bi] = meta.getMetadata();
-					if(retval !=0)
-					{
-						string err_msg = "Corrupt buffer caught at PSEC data level (2)";
-						if(retval == 3)
-						{
-							err_msg += "Because of the Metadata buffer";
-						}
-						writeErrorLog(err_msg);
-						corruptBuffer = true;
-					}
-
-					if(corruptBuffer)
-					{
-						string err_msg = "got a corrupt buffer with retval ";
-						err_msg += to_string(retval);
-						writeErrorLog(err_msg);
-						return 1;
-					}
-	
-					map_data[bi] = a->returnData();
-				}
-			}
-		}
-	}
-	std::cout << "Finished reading data for all boards" << std::endl;
-	std::cout << "------------------------------------" << std::endl;
-	if(raw==false && strcmp(timestamp.c_str(),"Oscope_b")!=0)
-	{
-		datafn = outfilename + "Data_" + timestamp + ".txt";
-		dataofs.open(datafn.c_str(), ios::app);
-		writePsecData(dataofs, boardsReadyForRead);
-	}
-
-        //eth.setBurstMode(false);
-
-	return 0;
-}
-
 /*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
-int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, const string& label)
+int ACC::listenForAcdcData(const string& timestamp)
 {
-    (void)trigMode; //currently unused
-
     bool corruptBuffer;
     vector<int> boardsReadyForRead;
     map<int,int> readoutSize;
@@ -533,22 +458,20 @@ int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, cons
     string datafn;
     ofstream dataofs;
 
+    unsigned int boardsForRead = 0;
+    for(ACDC& acdc : acdcs)
+    {
+        if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
+    }
+
     string rawfn;
-    if(raw==true)
+    if(params_.rawMode==true)
     {
         //vbuffer = acdc_data;
         rawfn = outfilename + "Raw_";
-        if(label.size() > 0) rawfn += label + "_";
+        if(params_.label.size() > 0) rawfn += params_.label + "_";
         rawfn += timestamp + "_b";
     }
-
-    //this function is simply readAcdcBuffers
-    //if the trigMode is software
-    //if(trigMode == 1)
-    //{
-    //      int retval = readAcdcBuffers(raw, timestamp);
-    //      return retval;
-    //}
 
     //setup a sigint capturer to safely
     //reset the boards if a ctrl-c signal is found
@@ -614,18 +537,24 @@ int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, cons
         }
 
         //old trigger
-        if(boardsReadyForRead==alignedAcdcIndices)
+        if(boardsReadyForRead.size()==boardsForRead)
         {
             break;
         }
     }
 
+    int test = 0;
     //read out data FIFOs 
-    for(int bi: boardsReadyForRead)
+    for(ACDC& acdc: acdcs)
     {
         //base command for set data readmode and which board bi to read
-        eth.send(0x22, bi);
+        int bi = acdc.getBoardIndex();
 
+        //skip if board is not active 
+        if(!((1 << bi) & params_.boardMask)) continue;
+
+        eth.send(0x22, bi);
+        
         std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
 
         //Handles buffers of incorrect size
@@ -639,32 +568,24 @@ int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, cons
 
 
         //save this buffer a private member of ACDC
-        //by looping through our acdc vector
-        //and checking each index 
-        //FIX THIS NONSENSE
-        for(ACDC* a: acdcs)
-        {
-            if(a->getBoardIndex() == bi)
-            {
-                int retval;
+        int retval;
 
-                //If raw data is requested save and return 0
-                if(raw==true)
-                {
-                    writeRawDataToFile(acdc_data, rawfn + to_string(bi) + ".txt");
-                    break;
-                }
-                else
-                {
-                    //parśe raw data to channel data and metadata
-                    retval = a->parseDataFromBuffer(acdc_data);
-                    map_data[bi] = a->returnData(); 
-                    if(retval == -3)
-                    {
-                        break;
-                    }
-                    else if(retval == 0)
-                    {
+        //If raw data is requested save and return 0
+        if(params_.rawMode==true)
+        {
+            writeRawDataToFile(acdc_data, rawfn + to_string(bi) + ".txt");
+        }
+        else
+        {
+            //parśe raw data to channel data and metadata
+            retval = acdc.parseDataFromBuffer(acdc_data);
+            map_data[bi] = acdc.returnData(); 
+            if(retval == -3)
+            {
+                break;
+            }
+            else if(retval == 0)
+            {
 //                        if(metaSwitch == 1)
 //                        {
 //                            retval = meta.parseBuffer(acdc_buffer,bi);
@@ -682,17 +603,15 @@ int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, cons
 //                        {
 //                            map_meta[bi] = {0};
 //                        }
-                    }
-                    else
-                    {
-                        writeErrorLog("Data parsing went wrong");
-                        return 1;
-                    }                               
-                }
             }
+            else
+            {
+                writeErrorLog("Data parsing went wrong");
+                return 1;
+            }                               
         }
     }
-    if(raw==false)
+    if(params_.rawMode==false)
     {
         datafn = outfilename + "Data_" + timestamp + ".txt";
         dataofs.open(datafn.c_str(), ios::app); 
@@ -705,9 +624,9 @@ int ACC::listenForAcdcData(int trigMode, bool raw, const string& timestamp, cons
 
 
 /*ID 27: Turn off triggers and data transfer off */
-void ACC::endRun(unsigned int boardMask)
+void ACC::endRun()
 {
-    setHardwareTrigSrc(0, boardMask);
+    setHardwareTrigSrc(0, params_.boardMask);
     eth.setBurstMode(false);
     enableTransfer(0); 
 }
@@ -844,16 +763,6 @@ void ACC::enableTransfer(int onoff)
     eth.send(0x100, command + onoff);
 }
 
-/*ID 10: Clear all ACDC class instances*/
-void ACC::clearAcdcs()
-{
-	for(int i = 0; i < (int)acdcs.size(); i++)
-	{
-		delete acdcs[i];
-	}
-	acdcs.clear();
-}
-
 /*ID 23: Wakes up the USB by requesting an ACC info frame*/
 void ACC::usbWakeup()
 {
@@ -870,10 +779,10 @@ void ACC::dumpData(unsigned int boardMask)
 
 
 /*ID 27: Resets the ACDCs*/
-void ACC::resetACDC()
+void ACC::resetACDC(unsigned int boardMask)
 {
-    unsigned int command = 0xFFFF0000;
-    eth.send(0x100, command);
+    unsigned int command = 0x00FF0000;
+    eth.send(0x100, command | (boardMask << 24));
     std::cout << "ACDCs were reset" << std::endl;
 }
 
@@ -881,7 +790,7 @@ void ACC::resetACDC()
 void ACC::resetACC()
 {
     eth.send(0x0000, 0x1);
-    std::cout << "ACCs was reset" << std::endl;
+    std::cout << "ACC was reset" << std::endl;
 }
 
 

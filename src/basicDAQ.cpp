@@ -56,10 +56,10 @@ int main(int argn, char * argc[])
 //    usleep(100000);
 
     // disable all calib switches
-    eth.send(0x100, 0xffc00000);
+    eth.send(0x100, 0xffc0ffff);
 
     // disable user calib input
-    eth.send(0x100, 0xffc10000);
+    eth.send(0x100, 0xffc10001);
 
     // set self trigger thresholds
     const unsigned int thresh = 0x750;
