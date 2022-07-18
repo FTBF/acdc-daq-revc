@@ -1,0 +1,12 @@
+basicConfig:
+  DAQSettings:
+    ip : 192.168.46.108
+    fileLabel : Pedestal
+    resetACCOnStart : false
+    resetACDCOnStart : false
+    triggerMode : 1
+    ACDCMask : 0xff
+    calibMode : true
+    humanReadableData : false
+    nevents : 1000
+    pedestals : 0x800
