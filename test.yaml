@@ -4,7 +4,7 @@ basicConfig:
     fileLabel : testData
     resetACCOnStart : false
     resetACDCOnStart : false
-    triggerMode : 4
+    triggerMode : 1
     ACDCMask : 0xff
     calibMode : false
     humanReadableData : false

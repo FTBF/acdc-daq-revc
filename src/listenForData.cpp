@@ -12,6 +12,7 @@
 #include <ctime>
 #include <vector>
 #include <stdio.h>
+#include <getopt.h>
 
 string getTime()
 {
@@ -40,10 +41,35 @@ void writeErrorLog(string errorMsg)
 //    os_err.close();
 }
 
-int main()
+int main(int argc, char *argv[])
 {
-    //YAML::Node config = YAML::LoadFile("calibPed.yaml");
-    YAML::Node config = YAML::LoadFile("test.yaml");
+    std::string configFile = "test.yaml";
+
+    while (1) {
+        int option_index = 0;
+        static struct option long_options[] = {
+            {"cfg",     required_argument, 0,  'c' },
+            {0,         0,                 0,  0 }
+        };
+
+        int c = getopt_long(argc, argv, "c:", long_options, &option_index);
+        if (c == -1)
+            break;
+
+        switch (option_index) 
+        {
+        case 0:
+            configFile = optarg;
+            break;
+
+        default:
+            printf("?? getopt returned character code 0%o ??\n", c);
+        }
+    }
+
+    printf("Using config file: %s\n", configFile.c_str());
+
+    YAML::Node config = YAML::LoadFile(configFile);
 
     YAML::Node config_DAQ = config["basicConfig"]["DAQSettings"];
 
