@@ -1,0 +1,48 @@
+basicConfig:
+  DAQSettings:
+    ip : 192.168.46.108
+    fileLabel : testData
+    resetACCOnStart : false
+    resetACDCOnStart : false
+    triggerMode : 1
+    ACDCMask : 0xff
+    calibMode : false
+    humanReadableData : false
+    nevents : 100
+    pedestals : 0x800
+    selfTrigThresholds : 0x900
+    selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+
+    ACDC0:
+      selfTrigThresholds : 0x900
+      selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+    ACDC3:
+      selfTrigThresholds : 0x900
+      selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+
+sequence:
+  Ped_0000:
+    DAQSettings:
+      pedestals : [0x000, 0x000, 0x000, 0x000, 0x001]
+      nevents : 1000
+      ACDC0:
+        selfTrigThresholds : [0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700, 0x700]
+    
+  Ped_0800:
+    DAQSettings:
+      pedestals : 0x800
+    
+  Ped_0f00:
+    DAQSettings:
+      pedestals : 0xf00
+    
+  scan:
+    DAQSettings:
+      pedestals :
+        start : 0x000
+        stop  : 0xfff
+        step  : 0x100
+
+  aTest:
+    DAQSettings:
+      calibMode : true
