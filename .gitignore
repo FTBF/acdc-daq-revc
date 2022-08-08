@@ -2,3 +2,6 @@ bin
 build
 *.sh
 
+Results/*
+*~
+*.log
