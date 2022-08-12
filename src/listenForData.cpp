@@ -41,9 +41,48 @@ void writeErrorLog(string errorMsg)
 //    os_err.close();
 }
 
+//based on answer from https://stackoverflow.com/questions/41326112/how-to-merge-node-in-yaml-cpp
+YAML::Node merge_nodes(const YAML::Node& a, const YAML::Node& b)
+{
+    if (!b.IsMap()) {
+        // If b is not a map, merge result is b, unless b is null
+        return b.IsNull() ? a : b;
+    }
+    if (!a.IsMap()) {
+        // If a is not a map, merge result is b
+        return b;
+    }
+    if (!b.size()) {
+        // If a is a map, and b is an empty map, return a
+        return a;
+    }
+    // Create a new map 'c' with the same mappings as a, merged with b
+    auto c = YAML::Node(YAML::NodeType::Map);
+    for (auto n : a) {
+        if (n.first.IsScalar()) {
+            const std::string & key = n.first.Scalar();
+            auto t = YAML::Node(b[key]);
+            if (t) {
+                c[n.first] = merge_nodes(n.second, t);
+                continue;
+            }
+        }
+        c[n.first] = n.second;
+    }
+    // Add the mappings from 'b' not already in 'c'
+    for (auto n : b) {
+        if (!n.first.IsScalar() || !c[n.first.Scalar()]) {
+            c[n.first] = n.second;
+        }
+    }
+    return c;
+}
+
 int main(int argc, char *argv[])
 {
     std::string configFile = "test.yaml";
+    bool sequence = false;
+    bool scan = false;
 
     while (1) {
         int option_index = 0;
@@ -79,78 +118,127 @@ int main(int argc, char *argv[])
     int eventNumber;
     int failCounter;
 	
-    int threshold;
-
     string timestamp;
 
-    ACC acc(config_DAQ["ip"].as<std::string>());
+    std::vector<YAML::Node> configs;
 
-    eventNumber = config_DAQ["nevents"].as<int>();
-
-    system("mkdir -p Results");
-
-    retval = acc.initializeForDataReadout(config_DAQ);
-    if(retval != 0)
+    //if a sequence or scan is requested, prepare this
+    if(config["sequence"])
     {
-        cout << "Initialization failed!" << endl;
-        return 0;
+        for(const auto& cfg : config["sequence"])
+        {
+            if(cfg.first.as<std::string>() == "scan" && cfg.second["DAQSettings"])
+            {
+                //a scan should only list one variable for scanning
+                std::string variable;
+                for(const auto& var : cfg.second["DAQSettings"])
+                {
+                    variable = var.first.as<std::string>();
+                    break;
+                }
+                int start = cfg.second["DAQSettings"][variable]["start"].as<int>();
+                int stop  = cfg.second["DAQSettings"][variable]["stop"].as<int>();
+                int step  = cfg.second["DAQSettings"][variable]["step"].as<int>();
+
+                for(int iVar = start; iVar <= stop; iVar += step)
+                {
+                    configs.push_back(YAML::Clone(config_DAQ));
+                    configs.back()[variable] = iVar;
+                    if(configs.back()["fileLabel"]) configs.back()["fileLabel"] = configs.back()["fileLabel"].as<std::string>() + "_scan_" + variable + "_" + std::to_string(iVar);
+                    else                            configs.back()["fileLabel"] = "scan_" + variable + "_" + std::to_string(iVar);
+                }
+            }
+            else
+            {
+                configs.push_back(merge_nodes(YAML::Clone(config_DAQ), cfg.second["DAQSettings"]));
+                if(configs.back()["fileLabel"]) configs.back()["fileLabel"] = configs.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
+                else                            configs.back()["fileLabel"] = cfg.first.as<std::string>();
+            }
+        }
     }
-    acc.dumpData(0xFF);
+    else
+    {
+        configs.emplace_back(config_DAQ);
+    }
+
+    //for(const auto& config : configs)
+    //{    
+    //    std::ofstream fout(config["fileLabel"].as<std::string>() + ".yaml");
+    //    fout << config;
+    //}
+
     timestamp = getTime();
-
-    eventCounter = 0;
-    failCounter = 0;
-    int reTime = 500;
-    int mult = 1;
-    auto t0 = std::chrono::high_resolution_clock::now();
-
-    while(eventCounter<eventNumber)
+    std::chrono::high_resolution_clock::time_point t0;
+    for(const auto& config_custom : configs)
     {
-        if(acc.params_.triggerMode == 1)
-        {
-            acc.softwareTrigger();
-        }
-        if(eventCounter>=reTime*mult)
-        {
-            //timestamp = getTime();
-            mult++;
-        }
-        retval = acc.listenForAcdcData(timestamp);
-        switch(retval)
-        {
-        case 0:
-            //std::cout << "Successfully found data and parsed" << std::endl;
-            eventCounter++;
-            failCounter=0;
-            break;
-        case 1:
-            writeErrorLog("Successfully found data but buffer corrupted");
-            acc.dumpData(0xFF);
-            failCounter++;
-            break;
-        case 2:
-            writeErrorLog("No data found");
-            acc.dumpData(0xFF);
-            failCounter++;
-            break;
-        case 3:
-            writeErrorLog("Sigint failure");
-            acc.dumpData(0xFF);
-            failCounter=50;
-            break;
-        default:
-            writeErrorLog("Unknown error");
-            failCounter++;
-            break;
-        }
-        if(failCounter >= 50)
-        {
-            std::cout << "Too many failed attempts to read data. Please check everything and try again" << std::endl;
-            break;
-        }
-    }
+        ACC acc(config_custom["ip"].as<std::string>());
 
-    acc.endRun();
+        eventNumber = config_custom["nevents"].as<int>();
+
+        system("mkdir -p Results");
+
+        retval = acc.initializeForDataReadout(config_custom);
+        if(retval != 0)
+        {
+            cout << "Initialization failed!" << endl;
+            return 0;
+        }
+        acc.dumpData(0xFF);
+
+        eventCounter = 0;
+        failCounter = 0;
+        int reTime = 500;
+        int mult = 1;
+        t0 = std::chrono::high_resolution_clock::now();
+
+        while(eventCounter<eventNumber)
+        {
+            if(acc.params_.triggerMode == 1)
+            {
+                acc.softwareTrigger();
+            }
+            if(eventCounter>=reTime*mult)
+            {
+                //timestamp = getTime();
+                mult++;
+            }
+            retval = acc.listenForAcdcData(timestamp);
+            switch(retval)
+            {
+            case 0:
+                //std::cout << "Successfully found data and parsed" << std::endl;
+                eventCounter++;
+                failCounter=0;
+                break;
+            case 1:
+                writeErrorLog("Successfully found data but buffer corrupted");
+                acc.dumpData(0xFF);
+                failCounter++;
+                break;
+            case 2:
+                writeErrorLog("No data found");
+                acc.dumpData(0xFF);
+                failCounter++;
+                break;
+            case 3:
+                writeErrorLog("Sigint failure");
+                acc.dumpData(0xFF);
+                failCounter=50;
+                break;
+            default:
+                writeErrorLog("Unknown error");
+                failCounter++;
+                break;
+            }
+            if(failCounter >= 50)
+            {
+                std::cout << "Too many failed attempts to read data. Please check everything and try again" << std::endl;
+                break;
+            }
+        }
+
+        acc.endRun();
+    }
 	
     auto t1 = std::chrono::high_resolution_clock::now();
     auto dt = 1.e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count();

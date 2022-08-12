@@ -175,6 +175,8 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 	std::cout << "Received board mask: ";
 	printf("0x%02x\n", params_.boardMask);
 		
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         //check ACDC PLL Settings
         // REVIEW ERRORS AND MESSAGES 
         for(ACDC& acdc : acdcs)
@@ -190,6 +192,12 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 
             //reset if requested
             if(acdc.params_.reset) resetACDC(1 << acdc.getBoardIndex());
+
+            //set pedestal settings
+            if(acdc.params_.pedestals.size() == 5)
+            {
+                setPedestals(1 << acdc.getBoardIndex(), acdc.params_.pedestals);
+            }
             
             // read ACDC info frame 
             eth.send(0x100, 0x00D00000 | (1 << (acdc.getBoardIndex() + 24)));
@@ -361,6 +369,14 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 	eth_burst.setBurstTarget();
 	eth.setBurstMode(true);
 	enableTransfer(3); 
+
+        //some setup needs at least 100 ms to complete 
+        auto t1 = std::chrono::high_resolution_clock::now();
+        while(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count() < 120000000)
+        {
+            usleep(1000);
+            t1 = std::chrono::high_resolution_clock::now();
+        }
         
 	return 0;
 }
@@ -647,6 +663,24 @@ bool ACC::setPedestals(unsigned int boardmask, unsigned int chipmask, unsigned i
 	    command = (command | (boardmask << 24) ) | (iChip << 12) | adc;
             eth.send(0x100, command);
 	}
+    }
+    return true;
+}
+
+
+bool ACC::setPedestals(unsigned int boardmask, const std::vector<unsigned int>& pedestals)
+{
+    if(pedestals.size() != 5) 
+    {
+        writeErrorLog("Incorrect number of pedestal values (" + std::to_string(pedestals.size()) + ") specified!!!");
+        return false;
+    }
+
+    for(int iChip = 0; iChip < 5; ++iChip)
+    {
+        unsigned int command = 0x00A20000;
+        command = (command | (boardmask << 24) ) | (iChip << 12) | pedestals[iChip];
+        eth.send(0x100, command);
     }
     return true;
 }
