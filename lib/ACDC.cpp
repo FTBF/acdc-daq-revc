@@ -42,7 +42,7 @@ void ACDC::parseConfig(const YAML::Node& config)
     {
         if(config["pedestals"].IsScalar())
         {
-            params_.pedestals = std::vector<unsigned int>(config["pedestals"].as<unsigned int>(), 5);
+            params_.pedestals = std::vector<unsigned int>(5, config["pedestals"].as<unsigned int>());
         }
         else if(config["pedestals"].IsSequence())
         {
@@ -67,7 +67,6 @@ void ACDC::parseConfig(const YAML::Node& config)
     }
     if(config["selfTrigMask"]) params_.selfTrigMask = config["selfTrigMask"].as<std::vector<unsigned int>>();
     if(config["calibMode"]) params_.calibMode = config["calibMode"].as<bool>();
-
 }
 
 //looks at the last ACDC buffer and organizes

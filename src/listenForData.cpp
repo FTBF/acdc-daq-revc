@@ -161,11 +161,11 @@ int main(int argc, char *argv[])
         configs.emplace_back(config_DAQ);
     }
 
-//    for(const auto& config : configs)
-//    {    
-//        std::ofstream fout(config["fileLabel"].as<std::string>() + ".yaml");
-//        fout << config;
-//    }
+    //for(const auto& config : configs)
+    //{    
+    //    std::ofstream fout(config["fileLabel"].as<std::string>() + ".yaml");
+    //    fout << config;
+    //}
 
     timestamp = getTime();
     std::chrono::high_resolution_clock::time_point t0;

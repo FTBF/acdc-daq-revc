@@ -77,6 +77,7 @@ public:
 	void dumpData(unsigned int boardMask); 
 	/*ID 19: Pedestal setting procedure.*/
 	bool setPedestals(unsigned int boardmask, unsigned int chipmask, unsigned int adc); 
+    bool setPedestals(unsigned int boardmask, const std::vector<unsigned int>& pedestals);
 	/*ID 20: Switch for the calibration input on the ACC*/
 	void toggleCal(int onoff, unsigned int channelmask = 0x7FFF,  unsigned int boardMask=0xFF); 
 	/*ID 21: Set up the hardware trigger*/
