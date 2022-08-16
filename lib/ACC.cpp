@@ -28,12 +28,10 @@ void ACC::got_signal(int){quitacc.store(true);}
 /*ID:5 Constructor*/
 ACC::ACC() : eth("192.168.46.108", "2007"), eth_burst("192.168.46.108", "2008")
 {
-	bool clearCheck;
 }
 
 ACC::ACC(const std::string& ip) : eth(ip, "2007"), eth_burst(ip, "2008")
 {
-	bool clearCheck;
 }
 
 /*ID:6 Destructor*/
@@ -377,7 +375,6 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
             usleep(1000);
             t1 = std::chrono::high_resolution_clock::now();
         }
-        
 	return 0;
 }
 
@@ -918,7 +915,7 @@ void ACC::scanLinkPhase(unsigned int boardMask, bool print)
     
     for(int iOffset = 0; iOffset < 24; ++iOffset)
     {
-        // advance phase one step (there are 24 total steps in one cock cycle)
+        // advance phase one step (there are 24 total steps in one clock cycle)
         eth.send(0x0054, 0x0000);
         for(int iChan = 0; iChan < 8; ++iChan)
         {
@@ -962,7 +959,7 @@ void ACC::scanLinkPhase(unsigned int boardMask, bool print)
         if(print) printf("Set:   "); 
         for(int iChan = 0; iChan < 8; ++iChan)
         {
-            // set phase for chanels in boardMask
+            // set phase for channels in boardMask
             if(boardMask & (1 << iChan))
             {
                 int stop = 0;
