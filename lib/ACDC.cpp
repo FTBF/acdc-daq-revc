@@ -9,11 +9,18 @@
 
 using namespace std;
 
-ACDC::ACDC() {}
+ACDC::ACDC() : outFile_(nullptr) {}
 
-ACDC::ACDC(int bi) : boardIndex(bi) {}
+ACDC::ACDC(int bi) : boardIndex(bi), outFile_(nullptr) {}
 
-ACDC::~ACDC(){}
+ACDC::~ACDC()
+{
+    if(outFile_)
+    {
+        outFile_->close();
+        delete outFile_;
+    }
+}
 
 ACDC::ConfigParams::ConfigParams() :
     reset(false),
@@ -21,7 +28,8 @@ ACDC::ConfigParams::ConfigParams() :
     selfTrigPolarity(0),
     triggerThresholds(0x780, 30),
     selfTrigMask(0x3f, 5),
-    calibMode(false)
+    calibMode(false),
+    dll_vdd(0xcff)
 {
 }
 
@@ -67,6 +75,7 @@ void ACDC::parseConfig(const YAML::Node& config)
     }
     if(config["selfTrigMask"]) params_.selfTrigMask = config["selfTrigMask"].as<std::vector<unsigned int>>();
     if(config["calibMode"]) params_.calibMode = config["calibMode"].as<bool>();
+    if(config["dll_vdd"]) params_.dll_vdd = config["dll_vdd"].as<unsigned int>();
 }
 
 //looks at the last ACDC buffer and organizes
@@ -134,6 +143,24 @@ int ACDC::parseDataFromBuffer(const vector<uint64_t>& buffer)
     return 0;
 }
 
+void ACDC::createFile(const std::string& fname)
+{
+    if(outFile_)
+    {
+        outFile_->close();
+        delete outFile_;
+    }
+    outFile_ = new ofstream(fname + to_string(boardIndex) + ".txt", ios::app | ios::binary); 
+}
+
+void ACDC::writeRawDataToFile(const vector<uint64_t>& buffer)//, string rawfn)
+{
+    //ofstream d(rawfn.c_str(), ios::app | ios::binary); 
+    if(outFile_) outFile_->write(reinterpret_cast<const char*>(buffer.data()), buffer.size()*sizeof(uint64_t));
+    else         writeErrorLog("No File!!!");
+    //d.close();
+    return;
+}
 
 void ACDC::writeErrorLog(string errorMsg)
 {

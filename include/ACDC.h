@@ -42,6 +42,9 @@ public:
 	//----------write data to file
 	void writeErrorLog(string errorMsg); //write errorlog with timestamps
 
+    void createFile(const std::string& fname);
+    void writeRawDataToFile(const vector<uint64_t>& buffer);
+
     class ConfigParams
     {
     public:
@@ -53,6 +56,7 @@ public:
         std::vector<unsigned int> triggerThresholds;
         std::vector<unsigned int> selfTrigMask;
         bool calibMode;
+        unsigned int dll_vdd;
     } params_;
 
 private:
@@ -64,6 +68,7 @@ private:
 	vector<unsigned short> lastAcdcBuffer; //most recently received ACDC buffer
 	map<int, vector<unsigned short>> data; //entire data map | index: channel < samplevector
 	map<string, unsigned short> map_meta; //entire meta map | index: metakey < value
+    std::ofstream *outFile_;
 };
 
 #endif

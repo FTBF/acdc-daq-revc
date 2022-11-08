@@ -25,7 +25,7 @@ public:
 	/*--------------------------------Constructor/Deconstructor---------------------------*/
 	/*ID 5: Constructor*/
 	ACC();
-    ACC(const std::string& ip);
+        ACC(const std::string& ip);
 	/*ID 6: Constructor*/
 	~ACC();
 
@@ -102,7 +102,8 @@ public:
 	/*--------------------------------------Write functions-------------------------------*/
 	void writeErrorLog(string errorMsg); //writes an errorlog with timestamps for debugging
 	void writePsecData(ofstream& d, const vector<int>& boardsReadyForRead); //main write for the data map
-	void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
+        //void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
+        
 
     class ConfigParams
     {
@@ -118,6 +119,10 @@ public:
         int accTrigPolarity;
         int validationStart;
         int validationWindow;
+
+        int coincidentTrigMask;
+        int coincidentTrigDelay[8];
+        int coincidentTrigStretch[8];
     } params_;
 
 private:

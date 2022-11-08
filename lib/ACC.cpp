@@ -26,7 +26,7 @@ void ACC::got_signal(int){quitacc.store(true);}
 /*--------------------------------Constructor/Deconstructor---------------------------*/
 
 /*ID:5 Constructor*/
-ACC::ACC() : eth("192.168.46.108", "2007"), eth_burst("192.168.46.108", "2008")
+ACC::ACC() : eth("192.168.46.107", "2007"), eth_burst("192.168.46.107", "2008")
 {
 }
 
@@ -48,8 +48,14 @@ ACC::ConfigParams::ConfigParams() :
     reset(false),
     accTrigPolarity(0),
     validationStart(0),
-    validationWindow(0)
+    validationWindow(0),
+    coincidentTrigMask(0x0f)
 {
+    for(int i = 0; i < 8; ++i)
+    {
+        coincidentTrigDelay[i] = 0;
+        coincidentTrigStretch[i] = 5;
+    }
 }
 
 /*------------------------------------------------------------------------------------*/
@@ -72,6 +78,14 @@ void ACC::parseConfig(const YAML::Node& config)
 
     if(config["validationStart"])  params_.validationStart = config["validationStart"].as<int>();
     if(config["validationWindow"]) params_.validationWindow = config["validationWindow"].as<int>();
+
+    if(config["coincidentTrigMask"]) params_.coincidentTrigMask = config["coincidentTrigMask"].as<int>();
+
+    for(int i = 0; i < 8; ++i)
+    {
+        if(config["coincidentTrigDelay_"   + std::to_string(i)]) params_.coincidentTrigDelay[i]   = config["coincidentTrigDelay_"   + std::to_string(i)].as<int>();
+        if(config["coincidentTrigStretch_" + std::to_string(i)]) params_.coincidentTrigStretch[i] = config["coincidentTrigStretch_" + std::to_string(i)].as<int>();
+    }
 }
 
 /*ID:9 Create ACDC class instances for each connected ACDC board*/
@@ -156,6 +170,12 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 
         //read ACC parameters from cfg file
         parseConfig(config);
+
+        //parse ACC specific settings
+        if(config["ACC0"])
+        {
+            parseConfig(config["ACC0"]);
+        }
 
         if(params_.reset) 
         {
@@ -245,6 +265,11 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
                 if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
             }
 
+            //set dll_vdd
+            for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
+            {
+                eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
+            }
         }
 
 
@@ -283,28 +308,28 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 		case 2: //Self trigger
 			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			goto selfsetup;
-		case 3: //Self trigger with validation 
-			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
-                        //timeout 
-			command = 0x00B20000;
-			command = (command | (params_.boardMask << 24)) | 40;
-			eth.send(0x100, command);
-			break;
-                case 4:
-			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
-			break;
 		case 5: //Self trigger with SMA validation on ACC
- 			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
                         eth.send(0x0038, params_.accTrigPolarity);
 
                         eth.send(0x0039, params_.validationStart);
 			
                         eth.send(0x003a, params_.validationWindow);
-			
-                        //eth.send(0x003b, PPSBeamMultiplexer);
-			
+                case 4: // ACC coincident 
+                        eth.send(0x003f, params_.coincidentTrigMask);
+
+                        for(int i = 0; i < 8; ++i)
+                        {
+                            eth.send(0x0040+i, params_.coincidentTrigDelay[i]);
+                            eth.send(0x0048+i, params_.coincidentTrigStretch[i]);
+                        }
+                        
+		case 3: //Self trigger with validation 
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+                        //timeout after 1 us 
+			command = 0x00B20000;
+			command = (command | (params_.boardMask << 24)) | 40;
+			eth.send(0x100, command);
 			goto selfsetup;
-			break;
 		default: // ERROR case
 			writeErrorLog("Trigger mode unrecognizes Error");	
 			break;
@@ -327,7 +352,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
                             {		
 				command = 0x00B10000;
 				command = (command | (acdcMask << 24)) | CHIPMASK[i] | acdc.params_.selfTrigMask[i]; 
-                                printf("%x\n", command);
+                                //printf("%x\n", command);
 				eth.send(0x100, command);
                             }
 			
@@ -406,11 +431,11 @@ void ACC::setHardwareTrigSrc(int src, unsigned int boardMask)
             break;
         case 3:
             ACCtrigMode = 2;
-            ACDCtrigMode = 3;
+            ACDCtrigMode = 1;
             break;
         case 4:
-            ACCtrigMode = 2;
-            ACDCtrigMode = 1;
+            ACCtrigMode = 5;
+            ACDCtrigMode = 3;
             break;
         default:
             ACCtrigMode = 0;
@@ -501,6 +526,17 @@ int ACC::listenForAcdcData(const string& timestamp)
     auto lastPrint = chrono::steady_clock::now();
     auto timeoutDuration = chrono::seconds(20); // will exit and reinitialize
 
+    for(ACDC& acdc: acdcs)
+    {
+        //base command for set data readmode and which board bi to read
+        int bi = acdc.getBoardIndex();
+
+        //skip if board is not active 
+        if(!((1 << bi) & params_.boardMask)) continue;
+
+        acdc.createFile(rawfn);
+    }
+
     //Request the ACC info frame to check buffers
     while(true)
     {
@@ -516,20 +552,19 @@ int ACC::listenForAcdcData(const string& timestamp)
         {
             string err_msg = "Have been waiting for a trigger for ";
             err_msg += to_string(chrono::duration_cast<chrono::seconds>(now - start).count());
-            err_msg += " seconds";
-            writeErrorLog(err_msg);
+            err_msg += " seconds\n";
             for(int i=0; i<MAX_NUM_BOARDS; i++)
             {
-                string err_msg = "Buffer for board ";
+                err_msg += "Buffer for board ";
                 err_msg += to_string(i);
                 err_msg += " has ";
                 err_msg += to_string(fifoOcc[i]);
-                err_msg += " words";
-                writeErrorLog(err_msg);
+                err_msg += " words\n";
             }
+            writeErrorLog(err_msg);
             lastPrint = chrono::steady_clock::now();
         }
-        if(chrono::duration_cast<chrono::seconds>(now - start) > timeoutDuration)
+        if(chrono::duration_cast<chrono::seconds>(now - start) > timeoutDuration*10)
         {
             return 2;
         }
@@ -550,7 +585,7 @@ int ACC::listenForAcdcData(const string& timestamp)
         }
 
         //old trigger
-        if(boardsReadyForRead.size()==boardsForRead)
+        if(boardsReadyForRead.size() >= 1)//==boardsForRead)
         {
             break;
         }
@@ -565,6 +600,17 @@ int ACC::listenForAcdcData(const string& timestamp)
 
         //skip if board is not active 
         if(!((1 << bi) & params_.boardMask)) continue;
+
+        bool boardFound = false;
+        for(const int& iACDC : boardsReadyForRead)
+        {
+            if(iACDC == bi)
+            {
+                boardFound = true;
+                break;
+            }
+        }
+        if(!boardFound) continue;
 
         eth.send(0x22, bi);
         
@@ -586,7 +632,7 @@ int ACC::listenForAcdcData(const string& timestamp)
         //If raw data is requested save and return 0
         if(params_.rawMode==true)
         {
-            writeRawDataToFile(acdc_data, rawfn + to_string(bi) + ".txt");
+            acdc.writeRawDataToFile(acdc_data);
         }
         else
         {
@@ -630,6 +676,7 @@ int ACC::listenForAcdcData(const string& timestamp)
         dataofs.open(datafn.c_str(), ios::app); 
         writePsecData(dataofs, boardsReadyForRead);
     }
+
     //eth.setBurstMode(false);
 
     return 0;
@@ -764,8 +811,30 @@ void ACC::versionCheck(bool debug)
 		printf("  Wr time FIFO Occ:       %8lu\n", buf[26]);
 		printf("  Sys time FIFO Occ:      %8lu\n", buf[27]);
 		printf("\n");
-	    }
-            //printf("bufLen: %ld\n", bufLen);
+
+//                for(int j = 0; j < 5; ++j)
+//                {
+//                    command = (0x01000000 << i) | (0x00D00001 + j); 
+//                    eth.send(0x100, command);
+//
+//                    usleep(500);
+//                    uint64_t bufLen = eth.recieve(0x1138+i);
+//                    if(bufLen >= 32)
+//                    {
+//                        std::vector<uint64_t> buf = eth.recieve_many(0x1200+i, bufLen, EthernetInterface::NO_ADDR_INC);
+//                        printf("    PSEC4 %d:\n", j);
+//                        printf("    RO Feedback count:          %8ld\n", buf[3]); 
+//                        printf("    RO Feedback target:         %8ld\n", buf[4]);
+//                        printf("    pro Vdd:                    %8ld\n", buf[7]); 
+//                        printf("    Vbias:                      %8ld\n", buf[5]);
+//                        printf("    Self trigger threshold 0:   %8ld\n", buf[6]); 
+//                        printf("    vcdl count:                 %8ld\n", (buf[14] << 16) | buf[13]); 
+//                        printf("    DLL Vdd:                    %8ld\n", buf[15]); 
+//                        printf("\n");
+//                    }
+//                }
+            }
+                //printf("bufLen: %ld\n", bufLen);
             //for(unsigned int j = 0; j < buf.size(); ++j) printf("%3i: %016lx\n", j, buf[j]);
         }
         else
@@ -848,18 +917,6 @@ void ACC::writeErrorLog(string errorMsg)
 }
 
 /*ID 30: Write function for the raw data format*/
-void ACC::writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn)
-{
-    ofstream d(rawfn.c_str(), ios::app | ios::binary); 
-    d.write(reinterpret_cast<const char*>(buffer.data()), buffer.size()*sizeof(uint64_t));
-//    for(const uint64_t& k : buffer)
-//    {
-//        d << hex <<  k << " ";
-//    }
-//    d << "\n";
-    d.close();
-    return;
-}
 
 /*ID 31: Write function for the parsed data format*/
 void ACC::writePsecData(ofstream& d, const vector<int>& boardsReadyForRead)
