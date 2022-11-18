@@ -17,5 +17,5 @@
 int main()
 {
     ACC acc; 
-    acc.scanLinkPhase(0xff, true);
+    acc.scanLinkPhase(0x00, true);
 }

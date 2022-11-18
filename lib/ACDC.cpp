@@ -9,16 +9,15 @@
 
 using namespace std;
 
-ACDC::ACDC() : outFile_(nullptr) {}
+ACDC::ACDC() : boardIndex(-1), outFile_(nullptr), nEvents_(0) {}
 
-ACDC::ACDC(int bi) : boardIndex(bi), outFile_(nullptr) {}
+ACDC::ACDC(int bi) : boardIndex(bi), outFile_(nullptr), nEvents_(0) {}
 
 ACDC::~ACDC()
 {
     if(outFile_)
     {
         outFile_->close();
-        delete outFile_;
     }
 }
 
@@ -33,7 +32,7 @@ ACDC::ConfigParams::ConfigParams() :
 {
 }
 
-int ACDC::getBoardIndex()
+int ACDC::getBoardIndex() const
 {
 	return boardIndex;
 }
@@ -148,21 +147,18 @@ void ACDC::createFile(const std::string& fname)
     if(outFile_)
     {
         outFile_->close();
-        delete outFile_;
     }
-    outFile_ = new ofstream(fname + to_string(boardIndex) + ".txt", ios::app | ios::binary); 
+    outFile_.reset(new ofstream(fname + to_string(boardIndex) + ".txt", ios::app | ios::binary)); 
 }
 
-void ACDC::writeRawDataToFile(const vector<uint64_t>& buffer)//, string rawfn)
+void ACDC::writeRawDataToFile(const vector<uint64_t>& buffer) const//, string rawfn)
 {
-    //ofstream d(rawfn.c_str(), ios::app | ios::binary); 
     if(outFile_) outFile_->write(reinterpret_cast<const char*>(buffer.data()), buffer.size()*sizeof(uint64_t));
     else         writeErrorLog("No File!!!");
-    //d.close();
     return;
 }
 
-void ACDC::writeErrorLog(string errorMsg)
+void ACDC::writeErrorLog(string errorMsg) const
 {
     string err = "errorlog.txt";
     cout << "------------------------------------------------------------" << endl;

@@ -163,10 +163,12 @@ std::vector<int> ACC::whichAcdcsConnected()
 }
 
 /*ID 17: Main init function that controls generalk setup as well as trigger settings*/
-int ACC::initializeForDataReadout(const YAML::Node& config)
+int ACC::initializeForDataReadout(const YAML::Node& config, const string& timestamp)
 {
 	unsigned int command;
 	int retval;
+        string outfilename = "./Results/";
+        string datafn;
 
         //read ACC parameters from cfg file
         parseConfig(config);
@@ -197,6 +199,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 
         //check ACDC PLL Settings
         // REVIEW ERRORS AND MESSAGES 
+        unsigned int boardsForRead = 0;
         for(ACDC& acdc : acdcs)
 	{
             //parse general ACDC settings
@@ -270,6 +273,8 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
             {
                 eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
             }
+
+            if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
         }
 
 
@@ -388,6 +393,27 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
         //flush data FIFOs
 	dumpData(params_.boardMask);
 
+        //create file objects
+        string rawfn;
+        if(params_.rawMode==true)
+        {
+            //vbuffer = acdc_data;
+            rawfn = outfilename + "Raw_";
+            if(params_.label.size() > 0) rawfn += params_.label + "_";
+            rawfn += timestamp + "_b";
+        }
+
+        for(ACDC& acdc: acdcs)
+        {
+            //base command for set data readmode and which board bi to read
+            int bi = acdc.getBoardIndex();
+
+            //skip if board is not active 
+            if(!((1 << bi) & params_.boardMask)) continue;
+
+            acdc.createFile(rawfn);
+        }
+
 	//Enables the transfer of data from ACDC to ACC
 	eth_burst.setBurstTarget();
 	eth.setBurstMode(true);
@@ -400,6 +426,12 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
             usleep(1000);
             t1 = std::chrono::high_resolution_clock::now();
         }
+        
+        //launch file writer thread
+        data_write_thread_.reset(new std::thread(&ACC::writeThread, this));
+
+        eth.send(0x23, 1);
+
 	return 0;
 }
 
@@ -479,205 +511,77 @@ void ACC::toggleCal(int onoff, unsigned int channelmask, unsigned int boardMask)
 }
 
 
+void ACC::writeThread()
+{
+    for(ACDC& acdc: acdcs)
+    {
+        acdc.setNEvents(0);
+    }
+
+    nEvtsMax = 0;
+    while(nEvtsMax < params_.eventNumber || params_.eventNumber < 0)
+    {
+        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
+        if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00)
+        {
+            int data_bi = acdc_data[0] & 0xff;
+
+            for(ACDC& acdc: acdcs)
+            {
+                //base command for set data readmode and which board bi to read
+                int bi = acdc.getBoardIndex();
+
+                if(data_bi == bi)
+                {
+                    acdc.writeRawDataToFile(acdc_data);
+                    acdc.incNEvents();
+                    break;
+                }
+            }
+        }
+        else
+        {
+            std::cout << "Header error: " << acdc_data[0] << std::endl;
+        }
+
+        nEvtsMax = std::max_element(acdcs.begin(), acdcs.end(), [](const ACDC& a, const ACDC& b){return a.getNEvents() < b.getNEvents();})->getNEvents();
+    }
+}
+
 /*------------------------------------------------------------------------------------*/
 /*---------------------------Read functions listening for data------------------------*/
 
 /*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
-int ACC::listenForAcdcData(const string& timestamp)
+int ACC::listenForAcdcData()
 {
-    bool corruptBuffer;
-    vector<int> boardsReadyForRead;
-    map<int,int> readoutSize;
-    unsigned int command; 
-    bool clearCheck;
+//    //setup a sigint capturer to safely
+//    //reset the boards if a ctrl-c signal is found
+//    struct sigaction sa;
+//    memset( &sa, 0, sizeof(sa) );
+//    sa.sa_handler = got_signal;
+//    sigfillset(&sa.sa_mask);
+//    sigaction(SIGINT,&sa,NULL);
 
-    //filename logistics
-    string outfilename = "./Results/";
-    string datafn;
-    ofstream dataofs;
-
-    unsigned int boardsForRead = 0;
-    for(ACDC& acdc : acdcs)
+    int eventCounter = 0;
+    while(eventCounter<params_.eventNumber)
     {
-        if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
-    }
-
-    string rawfn;
-    if(params_.rawMode==true)
-    {
-        //vbuffer = acdc_data;
-        rawfn = outfilename + "Raw_";
-        if(params_.label.size() > 0) rawfn += params_.label + "_";
-        rawfn += timestamp + "_b";
-    }
-
-    //setup a sigint capturer to safely
-    //reset the boards if a ctrl-c signal is found
-    struct sigaction sa;
-    memset( &sa, 0, sizeof(sa) );
-    sa.sa_handler = got_signal;
-    sigfillset(&sa.sa_mask);
-    sigaction(SIGINT,&sa,NULL);
-
-    //duration variables
-    auto start = chrono::steady_clock::now(); //start of the current event listening. 
-    auto now = chrono::steady_clock::now(); //just for initialization 
-    auto printDuration = chrono::seconds(2); //prints as it loops and listens
-    auto lastPrint = chrono::steady_clock::now();
-    auto timeoutDuration = chrono::seconds(20); // will exit and reinitialize
-
-    for(ACDC& acdc: acdcs)
-    {
-        //base command for set data readmode and which board bi to read
-        int bi = acdc.getBoardIndex();
-
-        //skip if board is not active 
-        if(!((1 << bi) & params_.boardMask)) continue;
-
-        acdc.createFile(rawfn);
-    }
-
-    //Request the ACC info frame to check buffers
-    while(true)
-    {
-        //Clear the boards read vector
-        boardsReadyForRead.clear(); 
-        readoutSize.clear();
-
-        std::vector<uint64_t> fifoOcc = eth.recieve_many(0x1130, 8);
-
-        //Time the listen fuction
-        now = chrono::steady_clock::now();
-        if(chrono::duration_cast<chrono::seconds>(now - lastPrint) > printDuration)
+        ++eventCounter;
+        if(params_.triggerMode == 1)
         {
-            string err_msg = "Have been waiting for a trigger for ";
-            err_msg += to_string(chrono::duration_cast<chrono::seconds>(now - start).count());
-            err_msg += " seconds\n";
-            for(int i=0; i<MAX_NUM_BOARDS; i++)
+            softwareTrigger();
+
+            //ensure we are past the 80 us PSEC read time
+            usleep(80);
+
+            //check if hardware buffers are filling up
+            //and give time for readout to catch up 
+            while(eventCounter - nEvtsMax >= 4)
             {
-                err_msg += "Buffer for board ";
-                err_msg += to_string(i);
-                err_msg += " has ";
-                err_msg += to_string(fifoOcc[i]);
-                err_msg += " words\n";
-            }
-            writeErrorLog(err_msg);
-            lastPrint = chrono::steady_clock::now();
-        }
-        if(chrono::duration_cast<chrono::seconds>(now - start) > timeoutDuration*10)
-        {
-            return 2;
-        }
-
-        //If sigint happens, return value of 3
-        if(quitacc.load())
-        {
-            return 3;
-        }
-
-        for(int k=0; k<MAX_NUM_BOARDS; k++)
-        {
-            if(fifoOcc[k]>=PSECFRAME)
-            {
-                boardsReadyForRead.push_back(k);
-                readoutSize[k] = PSECFRAME;
+                usleep(100);
             }
         }
-
-        //old trigger
-        if(boardsReadyForRead.size() >= 1)//==boardsForRead)
-        {
-            break;
-        }
     }
 
-    int test = 0;
-    //read out data FIFOs 
-    for(ACDC& acdc: acdcs)
-    {
-        //base command for set data readmode and which board bi to read
-        int bi = acdc.getBoardIndex();
-
-        //skip if board is not active 
-        if(!((1 << bi) & params_.boardMask)) continue;
-
-        bool boardFound = false;
-        for(const int& iACDC : boardsReadyForRead)
-        {
-            if(iACDC == bi)
-            {
-                boardFound = true;
-                break;
-            }
-        }
-        if(!boardFound) continue;
-
-        eth.send(0x22, bi);
-        
-        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
-
-        //Handles buffers of incorrect size
-        if((int)acdc_data.size() != 1541)
-        {
-            string err_msg = "Couldn't read " + std::to_string(readoutSize[bi]) + " words as expected! Tryingto fix it! Size was: ";
-            err_msg += to_string(acdc_data.size());
-            writeErrorLog(err_msg);
-            return 1;
-        }
-
-
-        //save this buffer a private member of ACDC
-        int retval;
-
-        //If raw data is requested save and return 0
-        if(params_.rawMode==true)
-        {
-            acdc.writeRawDataToFile(acdc_data);
-        }
-        else
-        {
-            //parśe raw data to channel data and metadata
-            retval = acdc.parseDataFromBuffer(acdc_data);
-            map_data[bi] = acdc.returnData(); 
-            if(retval == -3)
-            {
-                break;
-            }
-            else if(retval == 0)
-            {
-//                        if(metaSwitch == 1)
-//                        {
-//                            retval = meta.parseBuffer(acdc_buffer,bi);
-//                            if(retval != 0)
-//                            {
-//                                writeErrorLog("Metadata error not parsed correctly");
-//                                return 1;                                               
-//                            }
-//                            else
-//                            {
-//                                map_meta[bi] = meta.getMetadata();
-//                            }
-//                        }
-//                        else
-//                        {
-//                            map_meta[bi] = {0};
-//                        }
-            }
-            else
-            {
-                writeErrorLog("Data parsing went wrong");
-                return 1;
-            }                               
-        }
-    }
-    if(params_.rawMode==false)
-    {
-        datafn = outfilename + "Data_" + timestamp + ".txt";
-        dataofs.open(datafn.c_str(), ios::app); 
-        writePsecData(dataofs, boardsReadyForRead);
-    }
-
-    //eth.setBurstMode(false);
 
     return 0;
 }
@@ -686,9 +590,11 @@ int ACC::listenForAcdcData(const string& timestamp)
 /*ID 27: Turn off triggers and data transfer off */
 void ACC::endRun()
 {
+    data_write_thread_->join();
+    eth.send(0x23, 0);
     setHardwareTrigSrc(0, params_.boardMask);
     eth.setBurstMode(false);
-    enableTransfer(0); 
+    enableTransfer(0);
 }
 
 

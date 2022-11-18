@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include "yaml-cpp/yaml.h"
 #include "Metadata.h" //load metadata class
 
@@ -24,10 +25,13 @@ public:
 	~ACDC(); //deconstructor
 
 	//----------local return functions
-	int getBoardIndex(); //get the current board index from the acdc
-	int getNumCh() {int a = NUM_CH; return a;} //returns the number of total channels per acdc
-	int getNumPsec() {int a = NUM_PSEC; return a;} //returns the number of psec chips on an acdc
-	int getNumSamp() {int a = NUM_SAMP; return a;} //returns the number of samples for on event
+	int getBoardIndex() const; //get the current board index from the acdc
+	int getNumCh() const {int a = NUM_CH; return a;} //returns the number of total channels per acdc
+	int getNumPsec() const {int a = NUM_PSEC; return a;} //returns the number of psec chips on an acdc
+	int getNumSamp() const {int a = NUM_SAMP; return a;} //returns the number of samples for on event
+        int getNEvents() const {return nEvents_;} 
+        void setNEvents(int nEvts) {nEvents_ = nEvts;} 
+        void incNEvents() {++nEvents_;} 
 	map<int, vector<unsigned short>> returnData(){return data;} //returns the entire data map | index: channel < samplevector
 	map<string, unsigned short> returnMeta(){return map_meta;} //returns the entire meta map | index: metakey < value 
 
@@ -40,10 +44,10 @@ public:
 	int parseDataFromBuffer(const vector<uint64_t>& buffer); //parses only the psec data component of the ACDC buffer
 
 	//----------write data to file
-	void writeErrorLog(string errorMsg); //write errorlog with timestamps
+	void writeErrorLog(string errorMsg) const; //write errorlog with timestamps
 
     void createFile(const std::string& fname);
-    void writeRawDataToFile(const vector<uint64_t>& buffer);
+    void writeRawDataToFile(const vector<uint64_t>& buffer) const;
 
     class ConfigParams
     {
@@ -68,7 +72,8 @@ private:
 	vector<unsigned short> lastAcdcBuffer; //most recently received ACDC buffer
 	map<int, vector<unsigned short>> data; //entire data map | index: channel < samplevector
 	map<string, unsigned short> map_meta; //entire meta map | index: metakey < value
-    std::ofstream *outFile_;
+    std::shared_ptr<std::ofstream> outFile_;
+    int nEvents_;
 };
 
 #endif

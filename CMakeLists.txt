@@ -48,7 +48,7 @@ add_library(Metadata
 add_library(Scope
 		${LIBRARY_SOURCE_DIR}/Scope.cpp)
 
-target_link_libraries(ACC ACDC)
+target_link_libraries(ACC ACDC pthread)
 target_link_libraries(ACDC Metadata yaml-cpp)
 #target_link_libraries(Config ACC yaml-cpp)
 target_link_libraries(Scope ACC ACDC)
