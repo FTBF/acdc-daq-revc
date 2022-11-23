@@ -14,8 +14,10 @@
 #include "ACC.h"
 
 
-int main()
+int main(int argn, char ** argv)
 {
     ACC acc; 
-    acc.scanLinkPhase(0x00, true);
+    
+    if(argn > 1) acc.scanLinkPhase(strtoul(argv[1], nullptr, 0), true);
+    else         acc.scanLinkPhase(0x00, true);
 }

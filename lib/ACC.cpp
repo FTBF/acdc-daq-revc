@@ -192,13 +192,13 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             writeErrorLog("ACDCs could not be created");
 	}
 
-	std::cout << "Received board mask: ";
-	printf("0x%02x\n", params_.boardMask);
-		
         auto t0 = std::chrono::high_resolution_clock::now();
 
+        //clear slow RX buffers just in case they have leftover data.
+        eth.send(0x00000002, 0xff);
+
         //check ACDC PLL Settings
-        // REVIEW ERRORS AND MESSAGES 
+        // REVIEW ERRORS AND MESSAGES
         unsigned int boardsForRead = 0;
         for(ACDC& acdc : acdcs)
 	{
@@ -521,7 +521,7 @@ void ACC::writeThread()
     nEvtsMax = 0;
     while(nEvtsMax < params_.eventNumber || params_.eventNumber < 0)
     {
-        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
+        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1445);
         if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00)
         {
             int data_bi = acdc_data[0] & 0xff;
