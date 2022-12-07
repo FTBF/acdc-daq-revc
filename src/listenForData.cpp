@@ -83,15 +83,17 @@ int main(int argc, char *argv[])
     std::string configFile = "test.yaml";
     bool sequence = false;
     bool scan = false;
+    std::string ip_cl;
 
     while (1) {
         int option_index = 0;
         static struct option long_options[] = {
             {"cfg",     required_argument, 0,  'c' },
+            {"ip",      required_argument, 0,  'i' },
             {0,         0,                 0,  0 }
         };
 
-        int c = getopt_long(argc, argv, "c:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "c:i:", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -101,6 +103,9 @@ int main(int argc, char *argv[])
             configFile = optarg;
             break;
 
+        case 1:
+            ip_cl = optarg;
+            break;
         default:
             printf("?? getopt returned character code 0%o ??\n", c);
         }
@@ -166,7 +171,11 @@ int main(int argc, char *argv[])
     std::chrono::high_resolution_clock::time_point t0;
     for(const auto& config_custom : configs)
     {
-        ACC acc(config_custom["ip"].as<std::string>());
+        std::string ip;
+        if(ip_cl.size()) ip = ip_cl;
+        else             ip = config_custom["ip"].as<std::string>();
+
+        ACC acc(ip);
 
         system("mkdir -p Results");
 

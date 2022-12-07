@@ -17,7 +17,7 @@ using namespace std;
 
 int main()
 {
-    ACC acc;
+    ACC acc("192.168.46.107");
     acc.resetACC();
     usleep(5000);
     acc.resetACDC();

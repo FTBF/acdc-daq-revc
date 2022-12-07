@@ -192,8 +192,6 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             writeErrorLog("ACDCs could not be created");
 	}
 
-        auto t0 = std::chrono::high_resolution_clock::now();
-
         //clear slow RX buffers just in case they have leftover data.
         eth.send(0x00000002, 0xff);
 
@@ -214,12 +212,6 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             //reset if requested
             if(acdc.params_.reset) resetACDC(1 << acdc.getBoardIndex());
 
-            //set pedestal settings
-            if(acdc.params_.pedestals.size() == 5)
-            {
-                setPedestals(1 << acdc.getBoardIndex(), acdc.params_.pedestals);
-            }
-            
             // read ACDC info frame 
             eth.send(0x100, 0x00D00000 | (1 << (acdc.getBoardIndex() + 24)));
 
@@ -266,6 +258,12 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                 }
                 
                 if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
+            }
+
+            //set pedestal settings
+            if(acdc.params_.pedestals.size() == 5)
+            {
+                setPedestals(1 << acdc.getBoardIndex(), acdc.params_.pedestals);
             }
 
             //set dll_vdd
@@ -390,6 +388,11 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                         }
 	}
 
+        //set fifo backpressure depth to maximum
+        eth.send(0x57, 0xe1);
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         //flush data FIFOs
 	dumpData(params_.boardMask);
 
@@ -421,7 +424,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 
         //some setup needs at least 100 ms to complete 
         auto t1 = std::chrono::high_resolution_clock::now();
-        while(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count() < 120000000)
+        while(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count() < 200000000)
         {
             usleep(1000);
             t1 = std::chrono::high_resolution_clock::now();
@@ -430,6 +433,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
         //launch file writer thread
         data_write_thread_.reset(new std::thread(&ACC::writeThread, this));
 
+        //enable "auto-transmit" mode for ACC data readout 
         eth.send(0x23, 1);
 
 	return 0;
@@ -522,6 +526,7 @@ void ACC::writeThread()
     while(nEvtsMax < params_.eventNumber || params_.eventNumber < 0)
     {
         std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1445);
+//        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
         if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00)
         {
             int data_bi = acdc_data[0] & 0xff;
@@ -571,7 +576,7 @@ int ACC::listenForAcdcData()
             softwareTrigger();
 
             //ensure we are past the 80 us PSEC read time
-            usleep(80);
+            usleep(100);
 
             //check if hardware buffers are filling up
             //and give time for readout to catch up 
@@ -651,7 +656,7 @@ void ACC::versionCheck(bool debug)
 
 	if(debug)
 	{
-	    auto eAccBuffer = eth.recieve_many(0x1100, 64);
+	    auto eAccBuffer = eth.recieve_many(0x1100, 64+32);
 
 	    printf("  PLL lock status:\n    System PLL: %d\n    Serial PLL: %d\n    DPA PLL 1:  %d\n    DPA PLL 2:  %d\n", (AccBuffer[2] & 0x1)?1:0, (AccBuffer[2] & 0x2)?1:0, (AccBuffer[2] & 0x4)?1:0, (AccBuffer[2] & 0x8)?1:0);
 	    printf("  %-30s %10s %10s %10s %10s %10s %10s %10s %10s\n", "", "ACDC0", "ACDC1", "ACDC2", "ACDC3", "ACDC4", "ACDC5", "ACDC6", "ACDC7");
@@ -666,7 +671,10 @@ void ACC::versionCheck(bool debug)
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS PRBS Err 1", eAccBuffer[17], eAccBuffer[19], eAccBuffer[21], eAccBuffer[23], eAccBuffer[25], eAccBuffer[27], eAccBuffer[29], eAccBuffer[31]);
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Symbol Err 0", eAccBuffer[32], eAccBuffer[34], eAccBuffer[36], eAccBuffer[38], eAccBuffer[40], eAccBuffer[42], eAccBuffer[44], eAccBuffer[46]);
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Symbol Err 1", eAccBuffer[33], eAccBuffer[35], eAccBuffer[37], eAccBuffer[39], eAccBuffer[41], eAccBuffer[43], eAccBuffer[45], eAccBuffer[47]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS parity Err 0", eAccBuffer[64], eAccBuffer[66], eAccBuffer[68], eAccBuffer[70], eAccBuffer[72], eAccBuffer[74], eAccBuffer[76], eAccBuffer[78]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS parity Err 1", eAccBuffer[65], eAccBuffer[67], eAccBuffer[69], eAccBuffer[71], eAccBuffer[73], eAccBuffer[75], eAccBuffer[77], eAccBuffer[79]);
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MBPS FIFO Occ", eAccBuffer[48], eAccBuffer[49], eAccBuffer[50], eAccBuffer[51], eAccBuffer[52], eAccBuffer[53], eAccBuffer[54], eAccBuffer[55]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "Self trig count", eAccBuffer[80], eAccBuffer[81], eAccBuffer[82], eAccBuffer[83], eAccBuffer[84], eAccBuffer[85], eAccBuffer[86], eAccBuffer[87]);
 	    printf("\n");
 	    //for(auto& val : lastAccBuffer) printf("%016lx\n", val);
 	    //for(unsigned int i = 0; i < lastAccBuffer.size(); ++i) printf("stuff: 11%02x: %10ld\n", i, lastAccBuffer[i]);
@@ -703,12 +711,13 @@ void ACC::versionCheck(bool debug)
 	    {
 		printf("  Header/footer: %4lx %4lx %4lx %4lx (%s)\n", buf[0], buf[1], buf[30], buf[31], (buf[0] == 0x1234 && buf[1] == 0xbbbb && buf[30] == 0xbbbb && buf[31] == 0x4321)?"Correct":"Wrong");
 		printf("  PLL lock status:\n    ACC PLL:    %d\n    Serial PLL: %d\n    JC PLL:     %d\n    WR PLL:     %d\n", (buf[6] & 0x4)?1:0, (buf[6] & 0x2)?1:0, (buf[6] & 0x8)?1:0, (buf[6] & 0x1)?1:0);
+                printf("  FLL Locks:              %8lx\n", (buf[6] >> 4)&0x1f);
 		printf("  Backpressure:           %8d\n", (buf[5] & 0x2)?1:0);
 		printf("  40 MBPS parity error:   %8d\n", (buf[5] & 0x1)?1:0);
 		printf("  Event count:            %8lu\n", (buf[15] << 16) | buf[16]);
 		printf("  ID Frame count:         %8lu\n", (buf[17] << 16) | buf[18]);
-		printf("  Trigger count all:      %8lu\n", buf[19]);
-		printf("  Trigger count accepted: %8lu\n", buf[20]);
+		printf("  Trigger count all:      %8lu\n", (buf[11] << 16) | buf[12]);
+		printf("  Trigger count accepted: %8lu\n", (buf[13] << 16) | buf[14]);
 		printf("  PSEC0 FIFO Occ:         %8lu\n", buf[21]);
 		printf("  PSEC1 FIFO Occ:         %8lu\n", buf[22]);
 		printf("  PSEC2 FIFO Occ:         %8lu\n", buf[23]);

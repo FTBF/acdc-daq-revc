@@ -5,7 +5,7 @@ basicConfig:
     resetACCOnStart : false
     resetACDCOnStart : false
     triggerMode : 1
-    ACDCMask : 0x03
+    ACDCMask : 0xff
     calibMode : false
     humanReadableData : false
     nevents : 1000
