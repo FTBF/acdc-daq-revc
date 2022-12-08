@@ -272,6 +272,8 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                 eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
             }
 
+            eth.send(0x100, 0x00F20000 | (1 << (acdc.getBoardIndex() + 24)));
+
             if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
         }
 
