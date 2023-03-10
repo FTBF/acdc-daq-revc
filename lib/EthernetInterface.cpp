@@ -1,4 +1,5 @@
 #include "EthernetInterface.h"
+#include <iostream>
 
 EthernetInterface::EthernetInterface(std::string ip, std::string port) : sockfd_(-1), servinfo(NULL)
 {
@@ -181,51 +182,52 @@ std::vector<uint64_t> EthernetInterface::recieve_many(uint64_t addr, int numword
 {
     int numbytes;
     
-//    buff_[0] = 0;  // read request
-//    buff_[1] = (unsigned char)(numwords);  // num words
-//    memcpy((void*)&buff_[RX_ADDR_OFFSET_], (void*)&addr, 8);
-//    // ///////////////////////////////////////////////////////////
-//    int packetSz = RX_DATA_OFFSET_;
-//
-//    if((numbytes = sendto(sockfd_, buff_, packetSz, 0, p_->ai_addr, p_->ai_addrlen)) ==
-//       -1)
-//    {
-//	perror("sw: sendto");
-//	exit(1);
-//    }
-//
-//    struct sockaddr_storage their_addr;
-//    socklen_t addr_len = sizeof(their_addr);
-//
-//    // read response ///////////////////////////////////////////////////////////
-//    if((numbytes = recvfrom(sockfd_,
-//			    buff_,
-//			    MAXBUFLEN_ - 1,
-//			    0,
-//			    (struct sockaddr*)&their_addr,
-//			    &addr_len)) == -1)
-//    {
-//	perror("recvfrom");
-//	exit(1);
-//    }
+    buff_[0] = (flags & NO_ADDR_INC)?0x08:0x00;  // read request 0 | FLAG BITS
+    buff_[1] = (unsigned char)(numwords);  // num words
+    memcpy((void*)&buff_[RX_ADDR_OFFSET_], (void*)&addr, 8);
+    // ///////////////////////////////////////////////////////////
+    int packetSz = RX_DATA_OFFSET_;
 
-    //TEMPORARY HACK UNTIL FIRMWARE IS FIXED!!!!!!!!!!
-
-    std::vector<uint64_t> data;
-    data.resize(numwords);
-    for(int i = 0; i < numwords; ++i)
+    if((numbytes = sendto(sockfd_, buff_, packetSz, 0, p_->ai_addr, p_->ai_addrlen)) ==
+       -1)
     {
-        if(flags & NO_ADDR_INC)
-        {
-            data[i]  = recieve(addr, flags);
-        }
-        else
-        {
-            data[i]  = recieve(addr+i, flags);
-        }
-        //memcpy((void*)(data.data()+i*8), (void*)&buff_[TX_DATA_OFFSET_+i*8], 8*numwords);
-
+	perror("sw: sendto");
+	exit(1);
     }
+
+    struct sockaddr_storage their_addr;
+    socklen_t addr_len = sizeof(their_addr);
+
+    // read response ///////////////////////////////////////////////////////////
+    tv_ = {0, 250000};  // 0 seconds and 250000 useconds
+    int retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
+
+    if(retval > 0)
+    {
+        if((numbytes = recvfrom(sockfd_,
+                                buff_,
+                                MAXBUFLEN_ - 1,
+                                0,
+                                (struct sockaddr*)&their_addr,
+                                &addr_len)) == -1)
+        {
+            perror("recvfrom");
+            exit(1);
+        }
+    }
+    else if(retval == 0)
+    {
+        printf("Read many Timeout\n");
+        exit(1);
+    }
+    else
+    {
+        perror("select()");
+        exit(1);
+    }
+
+    std::vector<uint64_t> data((numbytes-2)/8);
+    memcpy((void*)data.data(), (void*)&buff_[TX_DATA_OFFSET_], numbytes - 2);
 	
     return data;
 }
@@ -245,9 +247,8 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
     while(wordsRead < numwords)
     {
         // read response ///////////////////////////////////////////////////////////
-        tv_ = {0, 250000};  // 0 seconds and 250000 useconds
+        tv_ = {65, 250000};  // 0 seconds and 250000 useconds
         int retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
-
         if(retval > 0)
         {
             if((numbytes = recvfrom(sockfd_,

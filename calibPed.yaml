@@ -1,6 +1,6 @@
 basicConfig:
   DAQSettings:
-    ip : 192.168.46.108
+    ip : 192.168.46.107
     fileLabel : Pedestal
     resetACCOnStart : false
     resetACDCOnStart : false

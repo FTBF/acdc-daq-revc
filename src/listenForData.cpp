@@ -83,15 +83,17 @@ int main(int argc, char *argv[])
     std::string configFile = "test.yaml";
     bool sequence = false;
     bool scan = false;
+    std::string ip_cl;
 
     while (1) {
         int option_index = 0;
         static struct option long_options[] = {
             {"cfg",     required_argument, 0,  'c' },
+            {"ip",      required_argument, 0,  'i' },
             {0,         0,                 0,  0 }
         };
 
-        int c = getopt_long(argc, argv, "c:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "c:i:", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -101,6 +103,9 @@ int main(int argc, char *argv[])
             configFile = optarg;
             break;
 
+        case 1:
+            ip_cl = optarg;
+            break;
         default:
             printf("?? getopt returned character code 0%o ??\n", c);
         }
@@ -113,11 +118,6 @@ int main(int argc, char *argv[])
     YAML::Node config_DAQ = config["basicConfig"]["DAQSettings"];
 
     int retval;
-
-    int eventCounter;
-    int eventNumber;
-    int failCounter;
-	
     string timestamp;
 
     std::vector<YAML::Node> configs;
@@ -171,13 +171,15 @@ int main(int argc, char *argv[])
     std::chrono::high_resolution_clock::time_point t0;
     for(const auto& config_custom : configs)
     {
-        ACC acc(config_custom["ip"].as<std::string>());
+        std::string ip;
+        if(ip_cl.size()) ip = ip_cl;
+        else             ip = config_custom["ip"].as<std::string>();
 
-        eventNumber = config_custom["nevents"].as<int>();
+        ACC acc(ip);
 
         system("mkdir -p Results");
 
-        retval = acc.initializeForDataReadout(config_custom);
+        retval = acc.initializeForDataReadout(config_custom, timestamp);
         if(retval != 0)
         {
             cout << "Initialization failed!" << endl;
@@ -185,64 +187,20 @@ int main(int argc, char *argv[])
         }
         acc.dumpData(0xFF);
 
-        eventCounter = 0;
-        failCounter = 0;
-        int reTime = 500;
-        int mult = 1;
+//        eventCounter = 0;
+//        failCounter = 0;
+//        int reTime = 500;
+//        int mult = 1;
         t0 = std::chrono::high_resolution_clock::now();
 
-        while(eventCounter<eventNumber)
-        {
-            if(acc.params_.triggerMode == 1)
-            {
-                acc.softwareTrigger();
-            }
-            if(eventCounter>=reTime*mult)
-            {
-                //timestamp = getTime();
-                mult++;
-            }
-            retval = acc.listenForAcdcData(timestamp);
-            switch(retval)
-            {
-            case 0:
-                //std::cout << "Successfully found data and parsed" << std::endl;
-                eventCounter++;
-                failCounter=0;
-                break;
-            case 1:
-                writeErrorLog("Successfully found data but buffer corrupted");
-                acc.dumpData(0xFF);
-                failCounter++;
-                break;
-            case 2:
-                writeErrorLog("No data found");
-                acc.dumpData(0xFF);
-                failCounter++;
-                break;
-            case 3:
-                writeErrorLog("Sigint failure");
-                acc.dumpData(0xFF);
-                failCounter=50;
-                break;
-            default:
-                writeErrorLog("Unknown error");
-                failCounter++;
-                break;
-            }
-            if(failCounter >= 50)
-            {
-                std::cout << "Too many failed attempts to read data. Please check everything and try again" << std::endl;
-                break;
-            }
-        }
-
+        acc.listenForAcdcData();
         acc.endRun();
+        
+        auto t1 = std::chrono::high_resolution_clock::now();
+        auto dt = 1.e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count();
+        cout << "It took "<< dt <<" second(s)."<< endl;
     }
 	
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto dt = 1.e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count();
-    cout << "It took "<< dt <<" second(s)."<< endl;
     return 1;
 }
 

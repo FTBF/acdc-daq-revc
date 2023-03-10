@@ -26,14 +26,12 @@ void ACC::got_signal(int){quitacc.store(true);}
 /*--------------------------------Constructor/Deconstructor---------------------------*/
 
 /*ID:5 Constructor*/
-ACC::ACC() : eth("192.168.46.108", "2007"), eth_burst("192.168.46.108", "2008")
+ACC::ACC() : eth("192.168.46.107", "2007"), eth_burst("192.168.46.107", "2008")
 {
-	bool clearCheck;
 }
 
 ACC::ACC(const std::string& ip) : eth(ip, "2007"), eth_burst(ip, "2008")
 {
-	bool clearCheck;
 }
 
 /*ID:6 Destructor*/
@@ -50,8 +48,14 @@ ACC::ConfigParams::ConfigParams() :
     reset(false),
     accTrigPolarity(0),
     validationStart(0),
-    validationWindow(0)
+    validationWindow(0),
+    coincidentTrigMask(0x0f)
 {
+    for(int i = 0; i < 8; ++i)
+    {
+        coincidentTrigDelay[i] = 0;
+        coincidentTrigStretch[i] = 5;
+    }
 }
 
 /*------------------------------------------------------------------------------------*/
@@ -74,6 +78,14 @@ void ACC::parseConfig(const YAML::Node& config)
 
     if(config["validationStart"])  params_.validationStart = config["validationStart"].as<int>();
     if(config["validationWindow"]) params_.validationWindow = config["validationWindow"].as<int>();
+
+    if(config["coincidentTrigMask"]) params_.coincidentTrigMask = config["coincidentTrigMask"].as<int>();
+
+    for(int i = 0; i < 8; ++i)
+    {
+        if(config["coincidentTrigDelay_"   + std::to_string(i)]) params_.coincidentTrigDelay[i]   = config["coincidentTrigDelay_"   + std::to_string(i)].as<int>();
+        if(config["coincidentTrigStretch_" + std::to_string(i)]) params_.coincidentTrigStretch[i] = config["coincidentTrigStretch_" + std::to_string(i)].as<int>();
+    }
 }
 
 /*ID:9 Create ACDC class instances for each connected ACDC board*/
@@ -151,13 +163,21 @@ std::vector<int> ACC::whichAcdcsConnected()
 }
 
 /*ID 17: Main init function that controls generalk setup as well as trigger settings*/
-int ACC::initializeForDataReadout(const YAML::Node& config)
+int ACC::initializeForDataReadout(const YAML::Node& config, const string& timestamp)
 {
 	unsigned int command;
 	int retval;
+        string outfilename = "./Results/";
+        string datafn;
 
         //read ACC parameters from cfg file
         parseConfig(config);
+
+        //parse ACC specific settings
+        if(config["ACC0"])
+        {
+            parseConfig(config["ACC0"]);
+        }
 
         if(params_.reset) 
         {
@@ -172,13 +192,12 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
             writeErrorLog("ACDCs could not be created");
 	}
 
-	std::cout << "Received board mask: ";
-	printf("0x%02x\n", params_.boardMask);
-		
-        auto t0 = std::chrono::high_resolution_clock::now();
+        //clear slow RX buffers just in case they have leftover data.
+        eth.send(0x00000002, 0xff);
 
         //check ACDC PLL Settings
-        // REVIEW ERRORS AND MESSAGES 
+        // REVIEW ERRORS AND MESSAGES
+        unsigned int boardsForRead = 0;
         for(ACDC& acdc : acdcs)
 	{
             //parse general ACDC settings
@@ -193,12 +212,6 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
             //reset if requested
             if(acdc.params_.reset) resetACDC(1 << acdc.getBoardIndex());
 
-            //set pedestal settings
-            if(acdc.params_.pedestals.size() == 5)
-            {
-                setPedestals(1 << acdc.getBoardIndex(), acdc.params_.pedestals);
-            }
-            
             // read ACDC info frame 
             eth.send(0x100, 0x00D00000 | (1 << (acdc.getBoardIndex() + 24)));
 
@@ -247,8 +260,27 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
                 if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
             }
 
+            //set pedestal settings
+            if(acdc.params_.pedestals.size() == 5)
+            {
+                setPedestals(1 << acdc.getBoardIndex(), acdc.params_.pedestals);
+            }
+
+            //set dll_vdd
+            for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
+            {
+                eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
+            }
+
+            eth.send(0x100, 0x00B70000 | (1 << (acdc.getBoardIndex() + 24)) | (acdc.params_.acc_backpressure?1:0));
+
+            //reset dll
+            //eth.send(0x100, 0x00F20000 | (1 << (acdc.getBoardIndex() + 24)));
+            
+            //if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
         }
 
+        //usleep(100000);
 
 	//disable all triggers
 	//ACC trigger
@@ -270,7 +302,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 	for(ACDC& acdc : acdcs) 
         {
             unsigned int acdcMask = 1 << acdc.getBoardIndex();
-            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFF, acdcMask);
+            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFb, acdcMask);
         }
 
 	// Set trigger conditions
@@ -285,28 +317,28 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 		case 2: //Self trigger
 			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			goto selfsetup;
-		case 3: //Self trigger with validation 
-			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
-                        //timeout 
-			command = 0x00B20000;
-			command = (command | (params_.boardMask << 24)) | 40;
-			eth.send(0x100, command);
-			break;
-                case 4:
-			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
-			break;
 		case 5: //Self trigger with SMA validation on ACC
- 			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
                         eth.send(0x0038, params_.accTrigPolarity);
 
                         eth.send(0x0039, params_.validationStart);
 			
                         eth.send(0x003a, params_.validationWindow);
-			
-                        //eth.send(0x003b, PPSBeamMultiplexer);
-			
+                case 4: // ACC coincident 
+                        eth.send(0x003f, params_.coincidentTrigMask);
+
+                        for(int i = 0; i < 8; ++i)
+                        {
+                            eth.send(0x0040+i, params_.coincidentTrigDelay[i]);
+                            eth.send(0x0048+i, params_.coincidentTrigStretch[i]);
+                        }
+                        
+		case 3: //Self trigger with validation 
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+                        //timeout after 1 us 
+			command = 0x00B20000;
+			command = (command | (params_.boardMask << 24)) | 40;
+			eth.send(0x100, command);
 			goto selfsetup;
-			break;
 		default: // ERROR case
 			writeErrorLog("Trigger mode unrecognizes Error");	
 			break;
@@ -329,7 +361,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
                             {		
 				command = 0x00B10000;
 				command = (command | (acdcMask << 24)) | CHIPMASK[i] | acdc.params_.selfTrigMask[i]; 
-                                printf("%x\n", command);
+                                //printf("%x\n", command);
 				eth.send(0x100, command);
                             }
 			
@@ -362,8 +394,34 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
                         }
 	}
 
+        //set fifo backpressure depth to maximum
+        eth.send(0x57, 0xe1);
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+
         //flush data FIFOs
 	dumpData(params_.boardMask);
+
+        //create file objects
+        string rawfn;
+        if(params_.rawMode==true)
+        {
+            //vbuffer = acdc_data;
+            rawfn = outfilename + "Raw_";
+            if(params_.label.size() > 0) rawfn += params_.label + "_";
+            rawfn += timestamp + "_b";
+        }
+
+        for(ACDC& acdc: acdcs)
+        {
+            //base command for set data readmode and which board bi to read
+            int bi = acdc.getBoardIndex();
+
+            //skip if board is not active 
+            if(!((1 << bi) & params_.boardMask)) continue;
+
+            acdc.createFile(rawfn);
+        }
 
 	//Enables the transfer of data from ACDC to ACC
 	eth_burst.setBurstTarget();
@@ -372,12 +430,18 @@ int ACC::initializeForDataReadout(const YAML::Node& config)
 
         //some setup needs at least 100 ms to complete 
         auto t1 = std::chrono::high_resolution_clock::now();
-        while(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count() < 120000000)
+        while(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count() < 200000000)
         {
             usleep(1000);
             t1 = std::chrono::high_resolution_clock::now();
         }
-        
+
+        //launch file writer thread
+        data_write_thread_.reset(new std::thread(&ACC::writeThread, this));
+
+        //enable "auto-transmit" mode for ACC data readout 
+        eth.send(0x23, 1);
+
 	return 0;
 }
 
@@ -409,11 +473,11 @@ void ACC::setHardwareTrigSrc(int src, unsigned int boardMask)
             break;
         case 3:
             ACCtrigMode = 2;
-            ACDCtrigMode = 3;
+            ACDCtrigMode = 1;
             break;
         case 4:
-            ACCtrigMode = 2;
-            ACDCtrigMode = 1;
+            ACCtrigMode = 5;
+            ACDCtrigMode = 3;
             break;
         default:
             ACCtrigMode = 0;
@@ -457,183 +521,78 @@ void ACC::toggleCal(int onoff, unsigned int channelmask, unsigned int boardMask)
 }
 
 
+void ACC::writeThread()
+{
+    for(ACDC& acdc: acdcs)
+    {
+        acdc.setNEvents(0);
+    }
+
+    nEvtsMax = 0;
+    while(nEvtsMax < params_.eventNumber || params_.eventNumber < 0)
+    {
+        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1445);
+//        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
+        if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00)
+        {
+            int data_bi = acdc_data[0] & 0xff;
+
+            for(ACDC& acdc: acdcs)
+            {
+                //base command for set data readmode and which board bi to read
+                int bi = acdc.getBoardIndex();
+
+                if(data_bi == bi)
+                {
+                    acdc.writeRawDataToFile(acdc_data);
+                    acdc.incNEvents();
+                    break;
+                }
+            }
+        }
+        else
+        {
+            std::cout << "Header error: " << acdc_data[0] << std::endl;
+        }
+
+        nEvtsMax = std::max_element(acdcs.begin(), acdcs.end(), [](const ACDC& a, const ACDC& b){return a.getNEvents() < b.getNEvents();})->getNEvents();
+    }
+}
+
 /*------------------------------------------------------------------------------------*/
 /*---------------------------Read functions listening for data------------------------*/
 
 /*ID 15: Main listen fuction for data readout. Runs for 5s before retuning a negative*/
-int ACC::listenForAcdcData(const string& timestamp)
+int ACC::listenForAcdcData()
 {
-    bool corruptBuffer;
-    vector<int> boardsReadyForRead;
-    map<int,int> readoutSize;
-    unsigned int command; 
-    bool clearCheck;
+//    //setup a sigint capturer to safely
+//    //reset the boards if a ctrl-c signal is found
+//    struct sigaction sa;
+//    memset( &sa, 0, sizeof(sa) );
+//    sa.sa_handler = got_signal;
+//    sigfillset(&sa.sa_mask);
+//    sigaction(SIGINT,&sa,NULL);
 
-    //filename logistics
-    string outfilename = "./Results/";
-    string datafn;
-    ofstream dataofs;
-
-    unsigned int boardsForRead = 0;
-    for(ACDC& acdc : acdcs)
+    int eventCounter = 0;
+    while(eventCounter<params_.eventNumber)
     {
-        if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
-    }
-
-    string rawfn;
-    if(params_.rawMode==true)
-    {
-        //vbuffer = acdc_data;
-        rawfn = outfilename + "Raw_";
-        if(params_.label.size() > 0) rawfn += params_.label + "_";
-        rawfn += timestamp + "_b";
-    }
-
-    //setup a sigint capturer to safely
-    //reset the boards if a ctrl-c signal is found
-    struct sigaction sa;
-    memset( &sa, 0, sizeof(sa) );
-    sa.sa_handler = got_signal;
-    sigfillset(&sa.sa_mask);
-    sigaction(SIGINT,&sa,NULL);
-
-    //duration variables
-    auto start = chrono::steady_clock::now(); //start of the current event listening. 
-    auto now = chrono::steady_clock::now(); //just for initialization 
-    auto printDuration = chrono::seconds(2); //prints as it loops and listens
-    auto lastPrint = chrono::steady_clock::now();
-    auto timeoutDuration = chrono::seconds(20); // will exit and reinitialize
-
-    //Request the ACC info frame to check buffers
-    while(true)
-    {
-        //Clear the boards read vector
-        boardsReadyForRead.clear(); 
-        readoutSize.clear();
-
-        std::vector<uint64_t> fifoOcc = eth.recieve_many(0x1130, 8);
-
-        //Time the listen fuction
-        now = chrono::steady_clock::now();
-        if(chrono::duration_cast<chrono::seconds>(now - lastPrint) > printDuration)
+        ++eventCounter;
+        if(params_.triggerMode == 1)
         {
-            string err_msg = "Have been waiting for a trigger for ";
-            err_msg += to_string(chrono::duration_cast<chrono::seconds>(now - start).count());
-            err_msg += " seconds";
-            writeErrorLog(err_msg);
-            for(int i=0; i<MAX_NUM_BOARDS; i++)
+            softwareTrigger();
+
+            //ensure we are past the 80 us PSEC read time
+            usleep(400);
+
+            //check if hardware buffers are filling up
+            //and give time for readout to catch up 
+            while(eventCounter - nEvtsMax >= 4)
             {
-                string err_msg = "Buffer for board ";
-                err_msg += to_string(i);
-                err_msg += " has ";
-                err_msg += to_string(fifoOcc[i]);
-                err_msg += " words";
-                writeErrorLog(err_msg);
-            }
-            lastPrint = chrono::steady_clock::now();
-        }
-        if(chrono::duration_cast<chrono::seconds>(now - start) > timeoutDuration)
-        {
-            return 2;
-        }
-
-        //If sigint happens, return value of 3
-        if(quitacc.load())
-        {
-            return 3;
-        }
-
-        for(int k=0; k<MAX_NUM_BOARDS; k++)
-        {
-            if(fifoOcc[k]>=PSECFRAME)
-            {
-                boardsReadyForRead.push_back(k);
-                readoutSize[k] = PSECFRAME;
+                usleep(100);
             }
         }
-
-        //old trigger
-        if(boardsReadyForRead.size()==boardsForRead)
-        {
-            break;
-        }
     }
 
-    int test = 0;
-    //read out data FIFOs 
-    for(ACDC& acdc: acdcs)
-    {
-        //base command for set data readmode and which board bi to read
-        int bi = acdc.getBoardIndex();
-
-        //skip if board is not active 
-        if(!((1 << bi) & params_.boardMask)) continue;
-
-        eth.send(0x22, bi);
-        
-        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
-
-        //Handles buffers of incorrect size
-        if((int)acdc_data.size() != 1541)
-        {
-            string err_msg = "Couldn't read " + std::to_string(readoutSize[bi]) + " words as expected! Tryingto fix it! Size was: ";
-            err_msg += to_string(acdc_data.size());
-            writeErrorLog(err_msg);
-            return 1;
-        }
-
-
-        //save this buffer a private member of ACDC
-        int retval;
-
-        //If raw data is requested save and return 0
-        if(params_.rawMode==true)
-        {
-            writeRawDataToFile(acdc_data, rawfn + to_string(bi) + ".txt");
-        }
-        else
-        {
-            //parśe raw data to channel data and metadata
-            retval = acdc.parseDataFromBuffer(acdc_data);
-            map_data[bi] = acdc.returnData(); 
-            if(retval == -3)
-            {
-                break;
-            }
-            else if(retval == 0)
-            {
-//                        if(metaSwitch == 1)
-//                        {
-//                            retval = meta.parseBuffer(acdc_buffer,bi);
-//                            if(retval != 0)
-//                            {
-//                                writeErrorLog("Metadata error not parsed correctly");
-//                                return 1;                                               
-//                            }
-//                            else
-//                            {
-//                                map_meta[bi] = meta.getMetadata();
-//                            }
-//                        }
-//                        else
-//                        {
-//                            map_meta[bi] = {0};
-//                        }
-            }
-            else
-            {
-                writeErrorLog("Data parsing went wrong");
-                return 1;
-            }                               
-        }
-    }
-    if(params_.rawMode==false)
-    {
-        datafn = outfilename + "Data_" + timestamp + ".txt";
-        dataofs.open(datafn.c_str(), ios::app); 
-        writePsecData(dataofs, boardsReadyForRead);
-    }
-    //eth.setBurstMode(false);
 
     return 0;
 }
@@ -642,9 +601,11 @@ int ACC::listenForAcdcData(const string& timestamp)
 /*ID 27: Turn off triggers and data transfer off */
 void ACC::endRun()
 {
+    data_write_thread_->join();
+    eth.send(0x23, 0);
     setHardwareTrigSrc(0, params_.boardMask);
     eth.setBurstMode(false);
-    enableTransfer(0); 
+    enableTransfer(0);
 }
 
 
@@ -701,7 +662,7 @@ void ACC::versionCheck(bool debug)
 
 	if(debug)
 	{
-	    auto eAccBuffer = eth.recieve_many(0x1100, 64);
+	    auto eAccBuffer = eth.recieve_many(0x1100, 64+32);
 
 	    printf("  PLL lock status:\n    System PLL: %d\n    Serial PLL: %d\n    DPA PLL 1:  %d\n    DPA PLL 2:  %d\n", (AccBuffer[2] & 0x1)?1:0, (AccBuffer[2] & 0x2)?1:0, (AccBuffer[2] & 0x4)?1:0, (AccBuffer[2] & 0x8)?1:0);
 	    printf("  %-30s %10s %10s %10s %10s %10s %10s %10s %10s\n", "", "ACDC0", "ACDC1", "ACDC2", "ACDC3", "ACDC4", "ACDC5", "ACDC6", "ACDC7");
@@ -716,7 +677,10 @@ void ACC::versionCheck(bool debug)
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS PRBS Err 1", eAccBuffer[17], eAccBuffer[19], eAccBuffer[21], eAccBuffer[23], eAccBuffer[25], eAccBuffer[27], eAccBuffer[29], eAccBuffer[31]);
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Symbol Err 0", eAccBuffer[32], eAccBuffer[34], eAccBuffer[36], eAccBuffer[38], eAccBuffer[40], eAccBuffer[42], eAccBuffer[44], eAccBuffer[46]);
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS Symbol Err 1", eAccBuffer[33], eAccBuffer[35], eAccBuffer[37], eAccBuffer[39], eAccBuffer[41], eAccBuffer[43], eAccBuffer[45], eAccBuffer[47]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS parity Err 0", eAccBuffer[64], eAccBuffer[66], eAccBuffer[68], eAccBuffer[70], eAccBuffer[72], eAccBuffer[74], eAccBuffer[76], eAccBuffer[78]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MPBS parity Err 1", eAccBuffer[65], eAccBuffer[67], eAccBuffer[69], eAccBuffer[71], eAccBuffer[73], eAccBuffer[75], eAccBuffer[77], eAccBuffer[79]);
 	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "250 MBPS FIFO Occ", eAccBuffer[48], eAccBuffer[49], eAccBuffer[50], eAccBuffer[51], eAccBuffer[52], eAccBuffer[53], eAccBuffer[54], eAccBuffer[55]);
+	    printf("  %-30s %10lu %10lu %10lu %10lu %10lu %10lu %10lu %10lu\n", "Self trig count", eAccBuffer[80], eAccBuffer[81], eAccBuffer[82], eAccBuffer[83], eAccBuffer[84], eAccBuffer[85], eAccBuffer[86], eAccBuffer[87]);
 	    printf("\n");
 	    //for(auto& val : lastAccBuffer) printf("%016lx\n", val);
 	    //for(unsigned int i = 0; i < lastAccBuffer.size(); ++i) printf("stuff: 11%02x: %10ld\n", i, lastAccBuffer[i]);
@@ -753,12 +717,13 @@ void ACC::versionCheck(bool debug)
 	    {
 		printf("  Header/footer: %4lx %4lx %4lx %4lx (%s)\n", buf[0], buf[1], buf[30], buf[31], (buf[0] == 0x1234 && buf[1] == 0xbbbb && buf[30] == 0xbbbb && buf[31] == 0x4321)?"Correct":"Wrong");
 		printf("  PLL lock status:\n    ACC PLL:    %d\n    Serial PLL: %d\n    JC PLL:     %d\n    WR PLL:     %d\n", (buf[6] & 0x4)?1:0, (buf[6] & 0x2)?1:0, (buf[6] & 0x8)?1:0, (buf[6] & 0x1)?1:0);
+                printf("  FLL Locks:              %8lx\n", (buf[6] >> 4)&0x1f);
 		printf("  Backpressure:           %8d\n", (buf[5] & 0x2)?1:0);
 		printf("  40 MBPS parity error:   %8d\n", (buf[5] & 0x1)?1:0);
 		printf("  Event count:            %8lu\n", (buf[15] << 16) | buf[16]);
 		printf("  ID Frame count:         %8lu\n", (buf[17] << 16) | buf[18]);
-		printf("  Trigger count all:      %8lu\n", buf[19]);
-		printf("  Trigger count accepted: %8lu\n", buf[20]);
+		printf("  Trigger count all:      %8lu\n", (buf[11] << 16) | buf[12]);
+		printf("  Trigger count accepted: %8lu\n", (buf[13] << 16) | buf[14]);
 		printf("  PSEC0 FIFO Occ:         %8lu\n", buf[21]);
 		printf("  PSEC1 FIFO Occ:         %8lu\n", buf[22]);
 		printf("  PSEC2 FIFO Occ:         %8lu\n", buf[23]);
@@ -767,8 +732,32 @@ void ACC::versionCheck(bool debug)
 		printf("  Wr time FIFO Occ:       %8lu\n", buf[26]);
 		printf("  Sys time FIFO Occ:      %8lu\n", buf[27]);
 		printf("\n");
-	    }
-            //printf("bufLen: %ld\n", bufLen);
+
+                std::vector<std::vector<uint64_t>> bufs;
+                for(int j = 0; j < 5; ++j)
+                {
+                    command = (0x01000000 << i) | (0x00D00001 + j); 
+                    eth.send(0x100, command);
+
+                    usleep(500);
+                    uint64_t bufLen = eth.recieve(0x1138+i);
+                    if(bufLen >= 32)
+                    {
+                        bufs.push_back(eth.recieve_many(0x1200+i, bufLen, EthernetInterface::NO_ADDR_INC));
+                    }
+                }
+                printf("    PSEC4:                      %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][16], bufs[1][16], bufs[2][16], bufs[3][16], bufs[4][16]); 
+                printf("    RO Feedback count:          %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][3], bufs[1][3], bufs[2][3], bufs[3][3], bufs[4][3]); 
+                printf("    RO Feedback target:         %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][4], bufs[1][4], bufs[2][4], bufs[3][4], bufs[4][4]);
+                printf("    pro Vdd:                    %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][7], bufs[1][7], bufs[2][7], bufs[3][7], bufs[4][7]); 
+                printf("    Vbias:                      %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][5], bufs[1][5], bufs[2][5], bufs[3][5], bufs[4][5]);
+                printf("    Self trigger threshold 0:   %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][6], bufs[1][6], bufs[2][6], bufs[3][6], bufs[4][6]); 
+                printf("    vcdl count:                 %8ld  %8ld  %8ld  %8ld  %8ld\n", (bufs[0][14] << 16) | bufs[0][13], (bufs[1][14] << 16) | bufs[1][13], (bufs[2][14] << 16) | bufs[2][13], (bufs[3][14] << 16) | bufs[3][13], (bufs[4][14] << 16) | bufs[4][13]); 
+                printf("    DLL Vdd:                    %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][15], bufs[1][15], bufs[2][15], bufs[3][15], bufs[4][15]); 
+                printf("\n");
+
+            }
+                //printf("bufLen: %ld\n", bufLen);
             //for(unsigned int j = 0; j < buf.size(); ++j) printf("%3i: %016lx\n", j, buf[j]);
         }
         else
@@ -851,18 +840,6 @@ void ACC::writeErrorLog(string errorMsg)
 }
 
 /*ID 30: Write function for the raw data format*/
-void ACC::writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn)
-{
-    ofstream d(rawfn.c_str(), ios::app | ios::binary); 
-    d.write(reinterpret_cast<const char*>(buffer.data()), buffer.size()*sizeof(uint64_t));
-//    for(const uint64_t& k : buffer)
-//    {
-//        d << hex <<  k << " ";
-//    }
-//    d << "\n";
-    d.close();
-    return;
-}
 
 /*ID 31: Write function for the parsed data format*/
 void ACC::writePsecData(ofstream& d, const vector<int>& boardsReadyForRead)
@@ -918,7 +895,7 @@ void ACC::scanLinkPhase(unsigned int boardMask, bool print)
     
     for(int iOffset = 0; iOffset < 24; ++iOffset)
     {
-        // advance phase one step (there are 24 total steps in one cock cycle)
+        // advance phase one step (there are 24 total steps in one clock cycle)
         eth.send(0x0054, 0x0000);
         for(int iChan = 0; iChan < 8; ++iChan)
         {
@@ -962,7 +939,7 @@ void ACC::scanLinkPhase(unsigned int boardMask, bool print)
         if(print) printf("Set:   "); 
         for(int iChan = 0; iChan < 8; ++iChan)
         {
-            // set phase for chanels in boardMask
+            // set phase for channels in boardMask
             if(boardMask & (1 << iChan))
             {
                 int stop = 0;
@@ -1064,6 +1041,6 @@ void ACC::configJCPLL(unsigned int boardMask)
 //    sendJCPLLSPIWord(0x00000000);
 
     // write register contents to EEPROM
-    //sendJCPLLSPIWord(0x0000000f);
+    //sendJCPLLSPIWord(0x0000001f);
 
 }

@@ -6,7 +6,11 @@
 #include <algorithm>
 #include <vector>
 #include <map>
+#include <thread>
+#include <utility>
+#include <memory>
 #include "yaml-cpp/yaml.h"
+#include "BlockingQueue.h"
 
 using namespace std;
 
@@ -25,7 +29,7 @@ public:
 	/*--------------------------------Constructor/Deconstructor---------------------------*/
 	/*ID 5: Constructor*/
 	ACC();
-    ACC(const std::string& ip);
+        ACC(const std::string& ip);
 	/*ID 6: Constructor*/
 	~ACC();
 
@@ -68,11 +72,11 @@ public:
 	/*ID 13: Fires the software trigger*/
 	void softwareTrigger(); 
 	/*ID 15: Main listen fuction for data readout*/
-    int listenForAcdcData(const string& timestamp="invalidTime"); 
+    int listenForAcdcData(); 
 	/*ID 16: Used to dis/enable transfer data from the PSEC chips to the buffers*/
 	void enableTransfer(int onoff=0); 
 	/*ID 17: Main init function that controls generalk setup as well as trigger settings*/
-    int initializeForDataReadout(const YAML::Node& config);
+    int initializeForDataReadout(const YAML::Node& config, const string& timestamp = "");
 	/*ID 18: Tells ACDCs to clear their ram.*/ 	
 	void dumpData(unsigned int boardMask); 
 	/*ID 19: Pedestal setting procedure.*/
@@ -102,7 +106,8 @@ public:
 	/*--------------------------------------Write functions-------------------------------*/
 	void writeErrorLog(string errorMsg); //writes an errorlog with timestamps for debugging
 	void writePsecData(ofstream& d, const vector<int>& boardsReadyForRead); //main write for the data map
-	void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
+        //void writeRawDataToFile(const vector<uint64_t>& buffer, string rawfn); //main write for the raw data vector
+        
 
     class ConfigParams
     {
@@ -118,6 +123,10 @@ public:
         int accTrigPolarity;
         int validationStart;
         int validationWindow;
+
+        int coincidentTrigMask;
+        int coincidentTrigDelay[8];
+        int coincidentTrigStretch[8];
     } params_;
 
 private:
@@ -142,8 +151,13 @@ private:
 	map<int, vector<unsigned short>> map_acdcIF;
 	vector<unsigned short> map_accIF;
 
+    std::unique_ptr<std::thread> data_write_thread_;
+    BlockingQueue<ACDC*> data_queue_;
+    int nEvtsMax;
+
 	static void got_signal(int);
         void sendJCPLLSPIWord(unsigned int word, unsigned int boardMask = 0xff, bool verbose = false);
+    void writeThread();
 };
 
 #endif
