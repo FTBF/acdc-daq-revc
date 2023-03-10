@@ -28,7 +28,8 @@ ACDC::ConfigParams::ConfigParams() :
     triggerThresholds(0x780, 30),
     selfTrigMask(0x3f, 5),
     calibMode(false),
-    dll_vdd(0xcff)
+    dll_vdd(0xcff),
+    acc_backpressure(true)
 {
 }
 
@@ -74,6 +75,7 @@ void ACDC::parseConfig(const YAML::Node& config)
     }
     if(config["selfTrigMask"]) params_.selfTrigMask = config["selfTrigMask"].as<std::vector<unsigned int>>();
     if(config["calibMode"]) params_.calibMode = config["calibMode"].as<bool>();
+    if(config["accBackpressure"]) params_.acc_backpressure = config["accBackpressure"].as<bool>();
     if(config["dll_vdd"]) params_.dll_vdd = config["dll_vdd"].as<unsigned int>();
 }
 

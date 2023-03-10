@@ -272,11 +272,15 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                 eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
             }
 
-            eth.send(0x100, 0x00F20000 | (1 << (acdc.getBoardIndex() + 24)));
+            eth.send(0x100, 0x00B70000 | (1 << (acdc.getBoardIndex() + 24)) | (acdc.params_.acc_backpressure?1:0));
 
-            if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
+            //reset dll
+            //eth.send(0x100, 0x00F20000 | (1 << (acdc.getBoardIndex() + 24)));
+            
+            //if((1 << acdc.getBoardIndex()) & params_.boardMask) ++boardsForRead;
         }
 
+        //usleep(100000);
 
 	//disable all triggers
 	//ACC trigger
@@ -298,7 +302,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 	for(ACDC& acdc : acdcs) 
         {
             unsigned int acdcMask = 1 << acdc.getBoardIndex();
-            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFF, acdcMask);
+            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFb, acdcMask);
         }
 
 	// Set trigger conditions
@@ -431,7 +435,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             usleep(1000);
             t1 = std::chrono::high_resolution_clock::now();
         }
-        
+
         //launch file writer thread
         data_write_thread_.reset(new std::thread(&ACC::writeThread, this));
 
@@ -578,7 +582,7 @@ int ACC::listenForAcdcData()
             softwareTrigger();
 
             //ensure we are past the 80 us PSEC read time
-            usleep(100);
+            usleep(400);
 
             //check if hardware buffers are filling up
             //and give time for readout to catch up 
@@ -729,27 +733,29 @@ void ACC::versionCheck(bool debug)
 		printf("  Sys time FIFO Occ:      %8lu\n", buf[27]);
 		printf("\n");
 
-//                for(int j = 0; j < 5; ++j)
-//                {
-//                    command = (0x01000000 << i) | (0x00D00001 + j); 
-//                    eth.send(0x100, command);
-//
-//                    usleep(500);
-//                    uint64_t bufLen = eth.recieve(0x1138+i);
-//                    if(bufLen >= 32)
-//                    {
-//                        std::vector<uint64_t> buf = eth.recieve_many(0x1200+i, bufLen, EthernetInterface::NO_ADDR_INC);
-//                        printf("    PSEC4 %d:\n", j);
-//                        printf("    RO Feedback count:          %8ld\n", buf[3]); 
-//                        printf("    RO Feedback target:         %8ld\n", buf[4]);
-//                        printf("    pro Vdd:                    %8ld\n", buf[7]); 
-//                        printf("    Vbias:                      %8ld\n", buf[5]);
-//                        printf("    Self trigger threshold 0:   %8ld\n", buf[6]); 
-//                        printf("    vcdl count:                 %8ld\n", (buf[14] << 16) | buf[13]); 
-//                        printf("    DLL Vdd:                    %8ld\n", buf[15]); 
-//                        printf("\n");
-//                    }
-//                }
+                std::vector<std::vector<uint64_t>> bufs;
+                for(int j = 0; j < 5; ++j)
+                {
+                    command = (0x01000000 << i) | (0x00D00001 + j); 
+                    eth.send(0x100, command);
+
+                    usleep(500);
+                    uint64_t bufLen = eth.recieve(0x1138+i);
+                    if(bufLen >= 32)
+                    {
+                        bufs.push_back(eth.recieve_many(0x1200+i, bufLen, EthernetInterface::NO_ADDR_INC));
+                    }
+                }
+                printf("    PSEC4:                      %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][16], bufs[1][16], bufs[2][16], bufs[3][16], bufs[4][16]); 
+                printf("    RO Feedback count:          %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][3], bufs[1][3], bufs[2][3], bufs[3][3], bufs[4][3]); 
+                printf("    RO Feedback target:         %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][4], bufs[1][4], bufs[2][4], bufs[3][4], bufs[4][4]);
+                printf("    pro Vdd:                    %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][7], bufs[1][7], bufs[2][7], bufs[3][7], bufs[4][7]); 
+                printf("    Vbias:                      %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][5], bufs[1][5], bufs[2][5], bufs[3][5], bufs[4][5]);
+                printf("    Self trigger threshold 0:   %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][6], bufs[1][6], bufs[2][6], bufs[3][6], bufs[4][6]); 
+                printf("    vcdl count:                 %8ld  %8ld  %8ld  %8ld  %8ld\n", (bufs[0][14] << 16) | bufs[0][13], (bufs[1][14] << 16) | bufs[1][13], (bufs[2][14] << 16) | bufs[2][13], (bufs[3][14] << 16) | bufs[3][13], (bufs[4][14] << 16) | bufs[4][13]); 
+                printf("    DLL Vdd:                    %8ld  %8ld  %8ld  %8ld  %8ld\n", bufs[0][15], bufs[1][15], bufs[2][15], bufs[3][15], bufs[4][15]); 
+                printf("\n");
+
             }
                 //printf("bufLen: %ld\n", bufLen);
             //for(unsigned int j = 0; j < buf.size(); ++j) printf("%3i: %016lx\n", j, buf[j]);
@@ -1035,6 +1041,6 @@ void ACC::configJCPLL(unsigned int boardMask)
 //    sendJCPLLSPIWord(0x00000000);
 
     // write register contents to EEPROM
-    //sendJCPLLSPIWord(0x0000000f);
+    //sendJCPLLSPIWord(0x0000001f);
 
 }

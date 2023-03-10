@@ -247,7 +247,7 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
     while(wordsRead < numwords)
     {
         // read response ///////////////////////////////////////////////////////////
-        tv_ = {5, 250000};  // 0 seconds and 250000 useconds
+        tv_ = {65, 250000};  // 0 seconds and 250000 useconds
         int retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
         if(retval > 0)
         {
