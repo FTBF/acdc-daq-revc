@@ -103,6 +103,9 @@ public:
 	void resetACDC(unsigned int boardMask = 0xff); //resets the acdc boards
 	void resetACC(); //resets the acdc boards 
 
+    void startDAQThread();
+    void joinDAQThread();
+
 	/*------------------------------------------------------------------------------------*/
 	/*--------------------------------------Write functions-------------------------------*/
 	void writeErrorLog(string errorMsg); //writes an errorlog with timestamps for debugging
@@ -153,6 +156,7 @@ private:
 	vector<unsigned short> map_accIF;
 
     std::unique_ptr<std::thread> data_write_thread_;
+    std::unique_ptr<std::thread> daq_thread_;
     BlockingQueue<ACDC*> data_queue_;
     int nEvtsMax;
 

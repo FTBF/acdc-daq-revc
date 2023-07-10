@@ -647,6 +647,17 @@ int ACC::listenForAcdcData()
     return 0;
 }
 
+void ACC::startDAQThread()
+{
+    daq_thread_.reset(new std::thread(&ACC::listenForAcdcData, this));
+}
+
+void ACC::joinDAQThread()
+{
+    if(daq_thread_) daq_thread_->join();
+}
+
+
 void ACC::resetLinks()
 {
 //    setHardwareTrigSrc(0, params_.boardMask);

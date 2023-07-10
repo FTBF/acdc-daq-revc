@@ -1,6 +1,6 @@
 basicConfig:
   DAQSettings:
-    ip : 192.168.46.107
+    ip : 192.168.46.108
     fileLabel : testData
     resetACCOnStart : false
     resetACDCOnStart : false
@@ -9,15 +9,19 @@ basicConfig:
     calibMode : false
     humanReadableData : false
     nevents : 1000
-    pedestals : 0x800
-    selfTrigThresholds : 0x780
+    pedestals : 0xb00
+    selfTrigThresholds : 0x900
     selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
-    dll_vdd: 0xcff
+    dll_vdd: 0x100
+    accBackpressure: true
     coincidentTrigMask: 0x3
     coincidentTrigDelay_0: 0
     coincidentTrigDelay_1: 0
 
-    ACDC3:
-      selfTrigThresholds : 0x780
-      selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+ACC1:
+  DAQSettings:
+    ip: 192.168.46.107
 
+ACC2:
+  DAQSettings:
+    ip: 192.168.46.108

@@ -11,6 +11,8 @@
 #include <numeric>
 #include <ctime>
 #include <vector>
+#include <memory>
+#include <thread>
 #include <stdio.h>
 #include <getopt.h>
 
@@ -120,45 +122,68 @@ int main(int argc, char *argv[])
     int retval;
     string timestamp;
 
-    std::vector<YAML::Node> configs;
+    std::vector<YAML::Node> ACC_configs;
+    if(config["ACC1"])
+    {
+        int iACC = 1;
+        while(config["ACC" + std::to_string(iACC)])
+        {
+            ACC_configs.push_back(merge_nodes(YAML::Clone(config_DAQ), config["ACC" + std::to_string(iACC)]["DAQSettings"]));
+            if(ACC_configs.back()["fileLabel"]) ACC_configs.back()["fileLabel"] = ACC_configs.back()["fileLabel"].as<std::string>() + "_ACC" + std::to_string(iACC);
+            else                                ACC_configs.back()["fileLabel"] = "ACC" + std::to_string(iACC);
+            
+            ++iACC;      
+        }
+    }
+    else
+    {
+        ACC_configs.push_back(config_DAQ);
+    }
+        
+    std::vector<std::vector<YAML::Node>> configs;
 
     //if a sequence or scan is requested, prepare this
     if(config["sequence"])
     {
-        for(const auto& cfg : config["sequence"])
+        configs.push_back({});
+        for(const auto& acc_base_cfg : ACC_configs)
         {
-            if(cfg.first.as<std::string>() == "scan" && cfg.second["DAQSettings"])
+            auto& acc_cfg = configs.back();
+            for(const auto& cfg : config["sequence"])
             {
-                //a scan should only list one variable for scanning
-                std::string variable;
-                for(const auto& var : cfg.second["DAQSettings"])
+                if(cfg.first.as<std::string>() == "scan" && cfg.second["DAQSettings"])
                 {
-                    variable = var.first.as<std::string>();
-                    break;
-                }
-                int start = cfg.second["DAQSettings"][variable]["start"].as<int>();
-                int stop  = cfg.second["DAQSettings"][variable]["stop"].as<int>();
-                int step  = cfg.second["DAQSettings"][variable]["step"].as<int>();
+                    //a scan should only list one variable for scanning
+                    std::string variable;
+                    for(const auto& var : cfg.second["DAQSettings"])
+                    {
+                        variable = var.first.as<std::string>();
+                        break;
+                    }
+                    int start = cfg.second["DAQSettings"][variable]["start"].as<int>();
+                    int stop  = cfg.second["DAQSettings"][variable]["stop"].as<int>();
+                    int step  = cfg.second["DAQSettings"][variable]["step"].as<int>();
 
-                for(int iVar = start; iVar <= stop; iVar += step)
-                {
-                    configs.push_back(YAML::Clone(config_DAQ));
-                    configs.back()[variable] = iVar;
-                    if(configs.back()["fileLabel"]) configs.back()["fileLabel"] = configs.back()["fileLabel"].as<std::string>() + "_scan_" + variable + "_" + std::to_string(iVar);
-                    else                            configs.back()["fileLabel"] = "scan_" + variable + "_" + std::to_string(iVar);
+                    for(int iVar = start; iVar <= stop; iVar += step)
+                    {
+                        acc_cfg.push_back(YAML::Clone(acc_base_cfg));
+                        acc_cfg.back()[variable] = iVar;
+                        if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_scan_" + variable + "_" + std::to_string(iVar);
+                        else                            acc_cfg.back()["fileLabel"] = "scan_" + variable + "_" + std::to_string(iVar);
+                    }
                 }
-            }
-            else
-            {
-                configs.push_back(merge_nodes(YAML::Clone(config_DAQ), cfg.second["DAQSettings"]));
-                if(configs.back()["fileLabel"]) configs.back()["fileLabel"] = configs.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
-                else                            configs.back()["fileLabel"] = cfg.first.as<std::string>();
+                else
+                {
+                    acc_cfg.push_back(merge_nodes(YAML::Clone(acc_base_cfg), cfg.second["DAQSettings"]));
+                    if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
+                    else                            acc_cfg.back()["fileLabel"] = cfg.first.as<std::string>();
+                }
             }
         }
     }
     else
     {
-        configs.emplace_back(config_DAQ);
+        configs.emplace_back(ACC_configs);
     }
 
     //for(const auto& config : configs)
@@ -169,23 +194,29 @@ int main(int argc, char *argv[])
 
     timestamp = getTime();
     std::chrono::high_resolution_clock::time_point t0;
-    for(const auto& config_custom : configs)
+    for(const auto& config_acc_custom : configs)
     {
-        std::string ip;
-        if(ip_cl.size()) ip = ip_cl;
-        else             ip = config_custom["ip"].as<std::string>();
+        std::vector<std::unique_ptr<ACC>> acc_vec;
 
-        ACC acc(ip);
-
-        system("mkdir -p Results");
-
-        retval = acc.initializeForDataReadout(config_custom, timestamp);
-        if(retval != 0)
+        for(const auto& config_custom : config_acc_custom )
         {
-            cout << "Initialization failed!" << endl;
-            return 0;
+            std::string ip;
+            if(ip_cl.size()) ip = ip_cl;
+            else             ip = config_custom["ip"].as<std::string>();
+
+            printf("ip: %s\n", ip.c_str());
+            acc_vec.emplace_back(new ACC(ip));
+
+            //system("mkdir -p Results");
+
+            retval = acc_vec.back()->initializeForDataReadout(config_custom, timestamp);
+            if(retval != 0)
+            {
+                cout << "Initialization failed!" << endl;
+                return 0;
+            }
+            acc_vec.back()->dumpData(0xFF);
         }
-        acc.dumpData(0xFF);
 
 //        eventCounter = 0;
 //        failCounter = 0;
@@ -193,7 +224,15 @@ int main(int argc, char *argv[])
 //        int mult = 1;
         t0 = std::chrono::high_resolution_clock::now();
 
-        acc.listenForAcdcData();
+        for(auto& acc : acc_vec)
+        {
+            acc->startDAQThread();
+        }
+        for(auto& acc : acc_vec)
+        {
+            acc->joinDAQThread();
+        }
+        //acc.listenForAcdcData();
         //acc.endRun();
         
         auto t1 = std::chrono::high_resolution_clock::now();
