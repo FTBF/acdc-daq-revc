@@ -98,6 +98,7 @@ public:
 	void configJCPLL(unsigned int boardMask = 0xff);
         /*ID 27: Turn off triggers and data transfer off */
 	void endRun();
+    void resetLinks();
 	//:::
 	void resetACDC(unsigned int boardMask = 0xff); //resets the acdc boards
 	void resetACC(); //resets the acdc boards 

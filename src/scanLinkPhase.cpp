@@ -16,7 +16,7 @@
 
 int main(int argn, char ** argv)
 {
-    ACC acc("192.168.46.107"); 
+    ACC acc("192.168.46.108"); 
     
     if(argn > 1) acc.scanLinkPhase(strtoul(argv[1], nullptr, 0), true);
     else         acc.scanLinkPhase(0x00, true);

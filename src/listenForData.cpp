@@ -194,7 +194,7 @@ int main(int argc, char *argv[])
         t0 = std::chrono::high_resolution_clock::now();
 
         acc.listenForAcdcData();
-        acc.endRun();
+        //acc.endRun();
         
         auto t1 = std::chrono::high_resolution_clock::now();
         auto dt = 1.e-9*std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count();

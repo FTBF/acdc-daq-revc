@@ -16,7 +16,7 @@ using namespace std;
 
 int main()
 {
-    ACC acc("192.168.46.108");
+    ACC acc("192.168.46.109");
     acc.configJCPLL();
     
     return 0;
