@@ -1,7 +1,7 @@
 #include "EthernetInterface.h"
 #include <iostream>
 
-EthernetInterface::EthernetInterface(std::string ip, std::string port) : sockfd_(-1), servinfo(NULL)
+EthernetInterface::EthernetInterface(std::string ip, std::string port) : sockfd_(-1), servinfo(NULL), packetID_(-1)
 {
     struct addrinfo  hints;
     int rv;
@@ -160,6 +160,10 @@ uint64_t EthernetInterface::recieve(uint64_t addr, uint8_t flags)
             perror("recvfrom");
             exit(1);
         }
+
+        if(packetID_ >= 0 && (packetID_ + 1)%256 != buff_[1]) printf("Missing packet? We jumped from packet id %d to %d\n", packetID_, buff_[1]);
+        packetID_ = buff_[1];
+
     }
     else if(retval == 0)
     {
@@ -214,6 +218,9 @@ std::vector<uint64_t> EthernetInterface::recieve_many(uint64_t addr, int numword
             perror("recvfrom");
             exit(1);
         }
+
+        if(packetID_ >= 0 && (packetID_ + 1)%256 != buff_[1]) printf("Missing packet? We jumped from packet id %d to %d\n", packetID_, buff_[1]);
+        packetID_ = buff_[1];
     }
     else if(retval == 0)
     {
@@ -232,7 +239,7 @@ std::vector<uint64_t> EthernetInterface::recieve_many(uint64_t addr, int numword
     return data;
 }
 
-std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
+std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords, int timeout_sec, int timeout_us )
 {
     int numbytes;
     
@@ -247,7 +254,7 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
     while(wordsRead < numwords)
     {
         // read response ///////////////////////////////////////////////////////////
-        tv_ = {65, 250000};  // 0 seconds and 250000 useconds
+        tv_ = {timeout_sec, timeout_us};  // 0 seconds and 250000 useconds
         int retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
         if(retval > 0)
         {
@@ -261,7 +268,10 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
                 perror("recvfrom");
                 exit(1);
             }
-            //if(!wordsRead && (buff_[0] & 0x7) != 1) printf("Next packet not start of burst!\n"); 
+            if(!((buff_[0] & 0x7) == 1 || (buff_[0] & 0x7) == 2 || (buff_[0] & 0x7) == 3)) printf("Not burst packet! %x\n", buff_[0]); 
+
+            if(packetID_ >= 0 && (packetID_ + 1)%256 != buff_[1]) printf("Missing burst packet? We jumped from packet id %d to %d\n", packetID_, buff_[1]);
+            packetID_ = buff_[1];
 
             for (int i = 0; i < (numbytes-2)/8; ++i)
             {
@@ -287,8 +297,7 @@ std::vector<uint64_t> EthernetInterface::recieve_burst(int numwords)
             perror("select()");
             exit(1);
         }
-
     }
-	
+
     return data;
 }

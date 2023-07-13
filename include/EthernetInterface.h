@@ -31,6 +31,7 @@ private:
     unsigned char           buff_[MAXBUFLEN_];
     fd_set rfds_;
     struct timeval tv_;
+    int packetID_;
     
 public:
 
@@ -57,7 +58,7 @@ public:
 
     std::vector<uint64_t> recieve_many(uint64_t addr, int numwords, uint8_t flags = 0);
 
-    std::vector<uint64_t> recieve_burst(int numwords);
+    std::vector<uint64_t> recieve_burst(int numwords, int timeout_sec = 65, int timeout_us = 0);
 };
 
 #endif

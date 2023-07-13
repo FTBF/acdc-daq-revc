@@ -98,9 +98,13 @@ public:
 	void configJCPLL(unsigned int boardMask = 0xff);
         /*ID 27: Turn off triggers and data transfer off */
 	void endRun();
+    void resetLinks();
 	//:::
 	void resetACDC(unsigned int boardMask = 0xff); //resets the acdc boards
 	void resetACC(); //resets the acdc boards 
+
+    void startDAQThread();
+    void joinDAQThread();
 
 	/*------------------------------------------------------------------------------------*/
 	/*--------------------------------------Write functions-------------------------------*/
@@ -152,6 +156,7 @@ private:
 	vector<unsigned short> map_accIF;
 
     std::unique_ptr<std::thread> data_write_thread_;
+    std::unique_ptr<std::thread> daq_thread_;
     BlockingQueue<ACDC*> data_queue_;
     int nEvtsMax;
 

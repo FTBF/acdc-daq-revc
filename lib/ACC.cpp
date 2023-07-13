@@ -289,7 +289,13 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 	command = 0xffB00000;
 	eth.send(0x100, command);
         //disable data transmission
-        enableTransfer(0); 
+        enableTransfer(0);
+        //disable "auto-transmit" mode for ACC data readout 
+        eth.send(0x23, 0);
+
+
+        //flush data FIFOs
+	dumpData(params_.boardMask);
 
 	//train manchester links
 	eth.send(0x0060, 0);
@@ -302,7 +308,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 	for(ACDC& acdc : acdcs) 
         {
             unsigned int acdcMask = 1 << acdc.getBoardIndex();
-            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFb, acdcMask);
+            if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFF, acdcMask);
         }
 
 	// Set trigger conditions
@@ -315,7 +321,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                         setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			break;
 		case 2: //Self trigger
-			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+			//setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 			goto selfsetup;
 		case 5: //Self trigger with SMA validation on ACC
                         eth.send(0x0038, params_.accTrigPolarity);
@@ -401,6 +407,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 
         //flush data FIFOs
 	dumpData(params_.boardMask);
+        //eth.send(0x1ffffffff, 0x1);
 
         //create file objects
         string rawfn;
@@ -423,11 +430,6 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             acdc.createFile(rawfn);
         }
 
-	//Enables the transfer of data from ACDC to ACC
-	eth_burst.setBurstTarget();
-	eth.setBurstMode(true);
-	enableTransfer(3); 
-
         //some setup needs at least 100 ms to complete 
         auto t1 = std::chrono::high_resolution_clock::now();
         while(std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count() < 200000000)
@@ -436,11 +438,18 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             t1 = std::chrono::high_resolution_clock::now();
         }
 
+	//Enables the transfer of data from ACDC to ACC
+	eth_burst.setBurstTarget();
+	eth.setBurstMode(true);
+	enableTransfer(3); 
+
         //launch file writer thread
         data_write_thread_.reset(new std::thread(&ACC::writeThread, this));
 
         //enable "auto-transmit" mode for ACC data readout 
         eth.send(0x23, 1);
+
+        setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
 
 	return 0;
 }
@@ -529,11 +538,14 @@ void ACC::writeThread()
     }
 
     nEvtsMax = 0;
+    int evt = 0;
+    int consequentErrors = 0;
     while(nEvtsMax < params_.eventNumber || params_.eventNumber < 0)
     {
         std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1445);
-//        std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(1541);
-        if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00)
+        ++evt;
+        if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00 && 
+           (acdc_data[1]&0xffff000000000000) == 0xac9c000000000000)
         {
             int data_bi = acdc_data[0] & 0xff;
 
@@ -549,10 +561,44 @@ void ACC::writeThread()
                     break;
                 }
             }
+            consequentErrors = 0;
         }
         else
         {
-            std::cout << "Header error: " << acdc_data[0] << std::endl;
+            std::cout << "Header error: " << acdc_data[0] << "\t" << consequentErrors << "\n";
+            //versionCheck(true);
+            int i = 0;
+            int i_Stop = 99999999;
+            for(auto& datum : acdc_data)
+            {
+                printf("%5i: %16lx\n", i, datum);
+                if((datum&0xffffffffffffff00) == 0x123456789abcde00) 
+                {
+                    std::cout << "WEEEEHOOOOO: " << i << "\t" << evt << "\t" << nEvtsMax << "\t" << acdc_data.size() << "\n";
+                    i_Stop = i + 8;
+                }
+                ++i;
+                if(i == i_Stop) break;
+            }
+            resetLinks();
+            //std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(i);
+            //std::cout << "Read: " << acdc_data.size() << std::endl;
+            ++consequentErrors;
+            if(consequentErrors >= 2)
+            {
+                //try flushing data until relaigned
+                for(int i = 0; i < 15; ++i)
+                {
+                    std::vector<uint64_t> acdc_data = eth_burst.recieve_burst(2);
+                    if((acdc_data[0]&0xffffffffffffff00) == 0x123456789abcde00 && 
+                       (acdc_data[1]&0xffff000000000000) == 0xac9c000000000000)
+                    {
+                        //we found a header, slurp up the rest of this event
+                        eth_burst.recieve_burst(1445-182);
+                    }
+                }
+            }
+            else if(consequentErrors >= 4) break;
         }
 
         nEvtsMax = std::max_element(acdcs.begin(), acdcs.end(), [](const ACDC& a, const ACDC& b){return a.getNEvents() < b.getNEvents();})->getNEvents();
@@ -582,19 +628,49 @@ int ACC::listenForAcdcData()
             softwareTrigger();
 
             //ensure we are past the 80 us PSEC read time
-            usleep(400);
+            usleep(300);
 
             //check if hardware buffers are filling up
             //and give time for readout to catch up 
             while(eventCounter - nEvtsMax >= 4)
             {
-                usleep(100);
+                usleep(80);
             }
         }
     }
 
+    endRun();
+
+    if(nEvtsMax < params_.eventNumber - 1) printf("Events Missing\n");
+
 
     return 0;
+}
+
+void ACC::startDAQThread()
+{
+    daq_thread_.reset(new std::thread(&ACC::listenForAcdcData, this));
+}
+
+void ACC::joinDAQThread()
+{
+    if(daq_thread_) daq_thread_->join();
+}
+
+
+void ACC::resetLinks()
+{
+//    setHardwareTrigSrc(0, params_.boardMask);
+//    enableTransfer(0);
+    eth.send(0x23, 0);
+
+    usleep(100);
+    dumpData(params_.boardMask);
+
+//    enableTransfer(3);
+    eth.send(0x23, 1);
+//    setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+    
 }
 
 
@@ -602,10 +678,11 @@ int ACC::listenForAcdcData()
 void ACC::endRun()
 {
     data_write_thread_->join();
-    eth.send(0x23, 0);
     setHardwareTrigSrc(0, params_.boardMask);
-    eth.setBurstMode(false);
     enableTransfer(0);
+    eth.send(0x23, 0);
+    usleep(100);
+    eth.setBurstMode(false);
 }
 
 
@@ -812,6 +889,8 @@ void ACC::resetACDC(unsigned int boardMask)
 /*ID 28: Resets the ACCs*/
 void ACC::resetACC()
 {
+    eth.send(0x1ffffffff, 0x1);
+    sleep(5);
     eth.send(0x0000, 0x1);
     std::cout << "ACC was reset" << std::endl;
 }

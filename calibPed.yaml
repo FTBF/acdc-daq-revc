@@ -10,3 +10,11 @@ basicConfig:
     humanReadableData : false
     nevents : 1000
     pedestals : 0x800
+    selfTrigThresholds : 0x700
+    selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
+    dll_vdd: 0x100
+    accBackpressure: true
+    coincidentTrigMask: 0x3
+    coincidentTrigDelay_0: 0
+    coincidentTrigDelay_1: 0
+
