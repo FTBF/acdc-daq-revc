@@ -145,40 +145,41 @@ int main(int argc, char *argv[])
     //if a sequence or scan is requested, prepare this
     if(config["sequence"])
     {
-        configs.push_back({});
-        for(const auto& acc_base_cfg : ACC_configs)
+        for(const auto& cfg : config["sequence"])
         {
-            auto& acc_cfg = configs.back();
-            for(const auto& cfg : config["sequence"])
+            if(cfg.first.as<std::string>() == "scan" && cfg.second["DAQSettings"])
             {
-                if(cfg.first.as<std::string>() == "scan" && cfg.second["DAQSettings"])
+                //a scan should only list one variable for scanning
+                std::string variable;
+                for(const auto& var : cfg.second["DAQSettings"])
                 {
-                    //a scan should only list one variable for scanning
-                    std::string variable;
-                    for(const auto& var : cfg.second["DAQSettings"])
-                    {
-                        variable = var.first.as<std::string>();
-                        break;
-                    }
-                    int start = cfg.second["DAQSettings"][variable]["start"].as<int>();
-                    int stop  = cfg.second["DAQSettings"][variable]["stop"].as<int>();
-                    int step  = cfg.second["DAQSettings"][variable]["step"].as<int>();
+                    variable = var.first.as<std::string>();
+                    break;
+                }
+                int start = cfg.second["DAQSettings"][variable]["start"].as<int>();
+                int stop  = cfg.second["DAQSettings"][variable]["stop"].as<int>();
+                int step  = cfg.second["DAQSettings"][variable]["step"].as<int>();
 
-                    for(int iVar = start; iVar <= stop; iVar += step)
+                for(int iVar = start; iVar <= stop; iVar += step)
+                {
+                    configs.push_back({});
+                    auto& acc_cfg = configs.back();
+                    for(const auto& acc_base_cfg : ACC_configs)
                     {
                         acc_cfg.push_back(YAML::Clone(acc_base_cfg));
                         acc_cfg.back()[variable] = iVar;
                         if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_scan_" + variable + "_" + std::to_string(iVar);
                         else                            acc_cfg.back()["fileLabel"] = "scan_" + variable + "_" + std::to_string(iVar);
+                        printf("iVar: %d, %d\n", iVar, acc_cfg.size());
                     }
                 }
-                else
-                {
-                    acc_cfg.push_back(merge_nodes(YAML::Clone(acc_base_cfg), cfg.second["DAQSettings"]));
-                    if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
-                    else                            acc_cfg.back()["fileLabel"] = cfg.first.as<std::string>();
-                }
             }
+//                else
+//                {
+//                    acc_cfg.push_back(merge_nodes(YAML::Clone(acc_base_cfg), cfg.second["DAQSettings"]));
+//                    if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
+//                    else                            acc_cfg.back()["fileLabel"] = cfg.first.as<std::string>();
+//                }
         }
     }
     else
