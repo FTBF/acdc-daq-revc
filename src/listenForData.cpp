@@ -170,7 +170,6 @@ int main(int argc, char *argv[])
                         acc_cfg.back()[variable] = iVar;
                         if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_scan_" + variable + "_" + std::to_string(iVar);
                         else                            acc_cfg.back()["fileLabel"] = "scan_" + variable + "_" + std::to_string(iVar);
-                        printf("iVar: %d, %d\n", iVar, acc_cfg.size());
                     }
                 }
             }
