@@ -302,7 +302,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 	usleep(250);
 
         //scan hs link phases and pick optimal phase
-        scanLinkPhase(params_.boardMask);
+        scanLinkPhase(0xff);
 
         // Toogels the calibration mode on if requested
 	for(ACDC& acdc : acdcs) 
@@ -842,6 +842,7 @@ void ACC::versionCheck(bool debug)
             std::cout << "Board " << i << " is not connected" << std::endl;
         }
     }
+
 }
 
 
