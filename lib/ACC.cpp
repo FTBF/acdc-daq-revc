@@ -1094,10 +1094,12 @@ void ACC::configJCPLL(unsigned int boardMask)
 {
     // program registers 0 and 1 with approperiate settings for 40 MHz output 
     //sendJCPLLSPIWord(0x55500060, boardMask); // 25 MHz input
-    sendJCPLLSPIWord(0x5557C060, boardMask); // 125 MHz input
+    //sendJCPLLSPIWord(0x5557C060, boardMask); // 125 MHz input old settings
+    sendJCPLLSPIWord(0x55518060, boardMask); // 125 MHz input
     usleep(2000);    
     //sendJCPLLSPIWord(0x83810001, boardMask); // 25 MHz input
-    sendJCPLLSPIWord(0xFF810081, boardMask); // 125 MHz input
+    //sendJCPLLSPIWord(0xFF810081, boardMask); // 125 MHz input old settings
+    sendJCPLLSPIWord(0xAF810081, boardMask); // 125 MHz input
     usleep(2000);
 
     // cycle "power down" to force VCO calibration 
