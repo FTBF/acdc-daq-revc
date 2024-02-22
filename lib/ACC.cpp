@@ -723,6 +723,23 @@ bool ACC::setPedestals(unsigned int boardmask, const std::vector<unsigned int>& 
     return true;
 }
 
+
+void ACC::setVddDLL(const std::vector<uint32_t>& vdd_dll_vec, bool resetDLL)
+{
+    //set dll_vdd
+    for(const auto& acdc : acdcs)
+    {
+        for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
+        {
+            printf("%08x\n", 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | vdd_dll_vec[iPSEC]);
+            eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | vdd_dll_vec[iPSEC]);
+        }
+
+        //reset dll
+        if(resetDLL) eth.send(0x100, 0x00F20000 | (1 << (acdc.getBoardIndex() + 24)));
+    }
+}
+
 /*ID 24: Special function to check connected ACDCs for their firmware version*/ 
 void ACC::versionCheck(bool debug)
 {
@@ -793,8 +810,10 @@ void ACC::versionCheck(bool debug)
 	    if(debug)
 	    {
 		printf("  Header/footer: %4lx %4lx %4lx %4lx (%s)\n", buf[0], buf[1], buf[30], buf[31], (buf[0] == 0x1234 && buf[1] == 0xbbbb && buf[30] == 0xbbbb && buf[31] == 0x4321)?"Correct":"Wrong");
-		printf("  PLL lock status:\n    ACC PLL:    %d\n    Serial PLL: %d\n    JC PLL:     %d\n    WR PLL:     %d\n", (buf[6] & 0x4)?1:0, (buf[6] & 0x2)?1:0, (buf[6] & 0x8)?1:0, (buf[6] & 0x1)?1:0);
+		printf("  PLL lock status:\n    ACC PLL:    %d\n    Serial PLL: %d\n    JC PLL:     %d\n    SYS PLL:    %d\n    WR PLL:     %d\n", (buf[6] & 0x4)?1:0, (buf[6] & 0x2)?1:0, (buf[6] & 0x200)?1:0, (buf[6] & 0x8)?1:0, (buf[6] & 0x1)?1:0);
                 printf("  FLL Locks:              %8lx\n", (buf[6] >> 4)&0x1f);
+                printf("  ACC 40 MHz:             %8.3f MHz\n", float(buf[7])/1000.0);
+                printf("  JCPLL 40 MHz:           %8.3f MHz\n", float(buf[8])/1000.0);
 		printf("  Backpressure:           %8d\n", (buf[5] & 0x2)?1:0);
 		printf("  40 MBPS parity error:   %8d\n", (buf[5] & 0x1)?1:0);
 		printf("  Event count:            %8lu\n", (buf[15] << 16) | buf[16]);
