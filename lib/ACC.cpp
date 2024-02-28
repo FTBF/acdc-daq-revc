@@ -272,10 +272,10 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             }
 
             //set dll_vdd
-//            for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
-//            {
-//                eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
-//            }
+            for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
+            {
+                eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
+            }
 
             eth.send(0x100, 0x00B70000 | (1 << (acdc.getBoardIndex() + 24)) | (acdc.params_.acc_backpressure?1:0));
 
