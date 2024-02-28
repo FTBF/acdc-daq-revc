@@ -238,14 +238,15 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             if(!(acdcInfo[6] & 0x2)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked serial pll" << std::endl;
             if(!(acdcInfo[6] & 0x1)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked white rabbit pll" << std::endl;
 
-            if(!(acdcInfo[6] & 0x8))
+            //check JCPLL lock signal 
+            if(!(acdcInfo[6] & 0x200))
             {
                 // external PLL must be unconfigured, attempt to configure them 
                 configJCPLL();
 
                 // reset the ACDC after configuring JCPLL
                 resetACDC();
-                usleep(5000);
+                usleep(100000);
 
                 // check PLL bit again
                 // read ACD info frame 
@@ -256,9 +257,13 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                 {
                     std::cout << "ACDC" << acdc.getBoardIndex() << " has invalid info frame" << std::endl;
                 }
+
+                if(!(acdcInfo[6] & 0x200)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked JC pll");
                 
-                if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
             }
+
+            if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
+
 
             //set pedestal settings
             if(acdc.params_.pedestals.size() == 5)
@@ -267,10 +272,10 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             }
 
             //set dll_vdd
-            for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
-            {
-                eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
-            }
+//            for(int iPSEC = 0; iPSEC < 5; ++iPSEC)
+//            {
+//                eth.send(0x100, 0x00A00000 | (1 << (acdc.getBoardIndex() + 24)) | (iPSEC << 12) | acdc.params_.dll_vdd);
+//            }
 
             eth.send(0x100, 0x00B70000 | (1 << (acdc.getBoardIndex() + 24)) | (acdc.params_.acc_backpressure?1:0));
 
