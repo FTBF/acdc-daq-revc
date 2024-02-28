@@ -246,7 +246,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 
                 // reset the ACDC after configuring JCPLL
                 resetACDC();
-                usleep(100000);
+                usleep(500000);
 
                 // check PLL bit again
                 // read ACD info frame 
