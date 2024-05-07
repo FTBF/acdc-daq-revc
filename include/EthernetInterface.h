@@ -54,6 +54,8 @@ public:
 
     void send(uint64_t addr, const std::vector<uint64_t>& values);
 
+    void flush();
+
     uint64_t recieve(uint64_t addr, uint8_t flags = 0);
 
     std::vector<uint64_t> recieve_many(uint64_t addr, int numwords, uint8_t flags = 0);

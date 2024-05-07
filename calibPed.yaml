@@ -1,20 +1,52 @@
 basicConfig:
   DAQSettings:
-    ip : 192.168.46.107
-    fileLabel : Pedestal
+    ip : 192.168.46.109
+    fileLabel : ped
     resetACCOnStart : false
     resetACDCOnStart : false
     triggerMode : 1
     ACDCMask : 0xff
-    calibMode : true
+    calibMode : false
     humanReadableData : false
     nevents : 1000
-    pedestals : 0x800
-    selfTrigThresholds : 0x700
+    pedestals : 0xa00
+    selfTrigThresholds : 0x900
     selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
     dll_vdd: 0x100
     accBackpressure: true
     coincidentTrigMask: 0x3
     coincidentTrigDelay_0: 0
     coincidentTrigDelay_1: 0
+    coincidentTrigDelay_2: 0
+    coincidentTrigDelay_3: 0
+    coincidentTrigDelay_4: 0
+    coincidentTrigDelay_5: 0
+    coincidentTrigDelay_6: 0
+    coincidentTrigDelay_7: 0
+    coincidentTrigStretch: 3
+    coincidentTrigMask_intersation: 0x5
+    coincidentTrigMask_ACDCs: 0x000202
+    tx_source_sfp0: 1
+    tx_source_sfp1: 0
+    remote_trig_mask: 0x2
+    sfp0_countLoopback: 0
+    sfp1_countLoopback: 1
 
+
+#ACC1:
+#  DAQSettings:
+#    ip: 192.168.46.108
+#    #ACDCMask : 0x03
+#    selfTrigThresholds : 0x700
+
+#ACC2:
+#  DAQSettings:
+#    ip: 192.168.46.108
+#
+#sequence:
+#  scan:
+#    DAQSettings:
+#      pedestals :
+#        start : 0x000
+#        stop  : 0xfff
+#        step  : 0x010

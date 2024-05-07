@@ -49,12 +49,26 @@ ACC::ConfigParams::ConfigParams() :
     accTrigPolarity(0),
     validationStart(0),
     validationWindow(0),
-    coincidentTrigMask(0x0f)
+    coincidentTrigMask(0x0f),
+    coincidentTrigStretch(3),
+    localDelay(0),
+    sfp0Delay(0),
+    sfp1Delay(0),
+    coincidentTrigMask_interstation(7),
+    tx_source_sfp0(0),
+    tx_source_sfp1(0),
+    remote_trig_mask(7),
+    coincidentTrigMask_ACDCs(0xffffff),
+    sfp0_tx_disable(0),
+    sfp1_tx_disable(0),
+    sfp0_speed(0),
+    sfp1_speed(0),
+    sfp0_countLoopback(0),
+    sfp1_countLoopback(0)
 {
     for(int i = 0; i < 8; ++i)
     {
         coincidentTrigDelay[i] = 0;
-        coincidentTrigStretch[i] = 5;
     }
 }
 
@@ -80,12 +94,30 @@ void ACC::parseConfig(const YAML::Node& config)
     if(config["validationWindow"]) params_.validationWindow = config["validationWindow"].as<int>();
 
     if(config["coincidentTrigMask"]) params_.coincidentTrigMask = config["coincidentTrigMask"].as<int>();
+    if(config["localDelay"]) params_.localDelay = config["localDelay"].as<int>();
+    if(config["sfp0Delay"])  params_.sfp0Delay  = config["sfp0Delay"].as<int>();
+    if(config["sfp1Delay"])  params_.sfp1Delay  = config["sfp1Delay"].as<int>();
+
 
     for(int i = 0; i < 8; ++i)
     {
         if(config["coincidentTrigDelay_"   + std::to_string(i)]) params_.coincidentTrigDelay[i]   = config["coincidentTrigDelay_"   + std::to_string(i)].as<int>();
-        if(config["coincidentTrigStretch_" + std::to_string(i)]) params_.coincidentTrigStretch[i] = config["coincidentTrigStretch_" + std::to_string(i)].as<int>();
     }
+
+    if(config["coincidentTrigStretch"]) params_.coincidentTrigStretch = config["coincidentTrigStretch"].as<int>();
+
+    if(config["coincidentTrigMask_interstation"]) params_.coincidentTrigMask_interstation = config["coincidentTrigMask_interstation"].as<int>();
+    if(config["tx_source_sfp0"]) params_.tx_source_sfp0 = config["tx_source_sfp0"].as<int>();
+    if(config["tx_source_sfp1"]) params_.tx_source_sfp1 = config["tx_source_sfp1"].as<int>();
+    if(config["remote_trig_mask"]) params_.remote_trig_mask = config["remote_trig_mask"].as<int>();
+    if(config["coincidentTrigMask_ACDCs"]) params_.coincidentTrigMask_ACDCs = config["coincidentTrigMask_ACDCs"].as<int>();
+
+    if(config["sfp0_tx_disable"]) params_.sfp0_tx_disable = config["sfp0_tx_disable"].as<int>();
+    if(config["sfp1_tx_disable"]) params_.sfp1_tx_disable = config["sfp1_tx_disable"].as<int>();
+    if(config["sfp0_speed"]) params_.sfp0_speed = config["sfp0_speed"].as<int>();
+    if(config["sfp1_speed"]) params_.sfp1_speed = config["sfp1_speed"].as<int>();
+    if(config["sfp0_countLoopback"]) params_.sfp0_countLoopback = config["sfp0_countLoopback"].as<int>();
+    if(config["sfp1_countLoopback"]) params_.sfp1_countLoopback = config["sfp1_countLoopback"].as<int>();
 }
 
 /*ID:9 Create ACDC class instances for each connected ACDC board*/
@@ -220,7 +252,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             while(eth.recieve(0x1138+acdc.getBoardIndex()) < 32 && iTimeout > 0)
             {
                 usleep(10);
-                ++iTimeout;
+                --iTimeout;
             }
             if(iTimeout == 0) 
             {
@@ -234,19 +266,16 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                 std::cout << "ACDC" << acdc.getBoardIndex() << " has invalid info frame" << std::endl;
             }
 
-            if(!(acdcInfo[6] & 0x4)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked ACC pll" << std::endl;
-            if(!(acdcInfo[6] & 0x2)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked serial pll" << std::endl;
-            if(!(acdcInfo[6] & 0x1)) std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked white rabbit pll" << std::endl;
-
             //check JCPLL lock signal 
             if(!(acdcInfo[6] & 0x200))
             {
+                std::cout << "ACDC" << acdc.getBoardIndex() << " has unlocked jcpll, resetting jcpll and acdc" << std::endl;
                 // external PLL must be unconfigured, attempt to configure them 
                 configJCPLL();
 
                 // reset the ACDC after configuring JCPLL
                 resetACDC();
-                usleep(500000);
+                usleep(750000);
 
                 // check PLL bit again
                 // read ACD info frame 
@@ -257,13 +286,7 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                 {
                     std::cout << "ACDC" << acdc.getBoardIndex() << " has invalid info frame" << std::endl;
                 }
-
-                if(!(acdcInfo[6] & 0x200)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked JC pll");
-                
             }
-
-            if(!(acdcInfo[6] & 0x8)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
-
 
             //set pedestal settings
             if(acdc.params_.pedestals.size() == 5)
@@ -298,9 +321,19 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
         //disable "auto-transmit" mode for ACC data readout 
         eth.send(0x23, 0);
 
-
         //flush data FIFOs
 	dumpData(params_.boardMask);
+
+        //disable SFP TX
+        eth.send(0x0202, params_.sfp0_tx_disable);
+        eth.send(0x0212, params_.sfp1_tx_disable);
+
+        //synchronize SFP links
+        eth.send(0x200, 0x1);
+        eth.send(0x201, 0x1);
+        usleep(1);
+        eth.send(0x200, 0x1);
+        eth.send(0x201, 0x1);
 
 	//train manchester links
 	eth.send(0x0060, 0);
@@ -315,6 +348,11 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             unsigned int acdcMask = 1 << acdc.getBoardIndex();
             if(acdcMask & params_.boardMask) toggleCal(acdc.params_.calibMode, 0x7FFF, acdcMask);
         }
+
+        //configure ACC Delays
+        eth.send(0x003c, params_.localDelay);
+        eth.send(0x003d, params_.sfp0Delay);
+        eth.send(0x003e, params_.sfp1Delay);
 
 	// Set trigger conditions
 	switch(params_.triggerMode)
@@ -340,8 +378,8 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
                         for(int i = 0; i < 8; ++i)
                         {
                             eth.send(0x0040+i, params_.coincidentTrigDelay[i]);
-                            eth.send(0x0048+i, params_.coincidentTrigStretch[i]);
                         }
+                        eth.send(0x0048, params_.coincidentTrigStretch);
                         
 		case 3: //Self trigger with validation 
 			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
@@ -350,6 +388,84 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
 			command = (command | (params_.boardMask << 24)) | 40;
 			eth.send(0x100, command);
 			goto selfsetup;
+                case 6: // SFP interACC trigger coincident 
+                        eth.send(0x0049, params_.coincidentTrigMask_interstation);
+                        eth.send(0x004d, params_.coincidentTrigMask_ACDCs);
+                        
+                        // send remote trigger back to remote ACC
+                        eth.send(0x004a, 1);
+                        eth.send(0x004b, 1);
+
+                        //configure sfp counter loopback 
+                        eth.send(0x0204, 0);
+                        eth.send(0x0214, 0);
+
+                        for(int i = 0; i < 8; ++i)
+                        {
+                            eth.send(0x0040+i, params_.coincidentTrigDelay[i]);
+                        }
+                        eth.send(0x0048, params_.coincidentTrigStretch);
+
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+                        //timeout after 1 us 
+			command = 0x00B20000;
+			command = (command | (params_.boardMask << 24)) | 160;
+			eth.send(0x100, command);
+
+                        goto selfsetup;
+                case 7: // SFP interACC remote ACC trigger 
+                        eth.send(0x004c, params_.remote_trig_mask);
+
+                        // send trgger bits to trigger ACC 
+                        eth.send(0x004a, 0);
+                        eth.send(0x004b, 0);
+
+                        //configure sfp counter loopback 
+                        eth.send(0x0204, 1);
+                        eth.send(0x0214, 1);
+
+                        for(int i = 0; i < 8; ++i)
+                        {
+                            eth.send(0x0040+i, params_.coincidentTrigDelay[i]);
+                        }
+                        eth.send(0x0048, params_.coincidentTrigStretch);
+
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+                        //timeout after 1 us 
+			command = 0x00B20000;
+			command = (command | (params_.boardMask << 24)) | 80;
+			eth.send(0x100, command);
+
+                        goto selfsetup;
+                case 8: // SFP interACC trigger custom setup
+                case 9:
+                        eth.send(0x0049, params_.coincidentTrigMask_interstation);
+                        eth.send(0x004c, params_.remote_trig_mask);
+                        eth.send(0x004d, params_.coincidentTrigMask_ACDCs);
+
+                        std::cout << params_.tx_source_sfp0 << "\t" << params_.tx_source_sfp1 << "\t" << params_.sfp0_countLoopback << "\t" << params_.sfp1_countLoopback << std::endl;
+
+                        // send trgger bits to trigger ACC 
+                        eth.send(0x004a, params_.tx_source_sfp0);
+                        eth.send(0x004b, params_.tx_source_sfp1);
+
+                        //set counter loopback mode 
+                        eth.send(0x204, params_.sfp0_countLoopback);
+                        eth.send(0x214, params_.sfp1_countLoopback);
+
+                        for(int i = 0; i < 8; ++i)
+                        {
+                            eth.send(0x0040+i, params_.coincidentTrigDelay[i]);
+                        }
+                        eth.send(0x0048, params_.coincidentTrigStretch);
+
+			setHardwareTrigSrc(params_.triggerMode,params_.boardMask);
+                        //timeout after 1 us 
+			command = 0x00B20000;
+			command = (command | (params_.boardMask << 24)) | 80;
+			eth.send(0x100, command);
+
+                        goto selfsetup;
 		default: // ERROR case
 			writeErrorLog("Trigger mode unrecognizes Error");	
 			break;
@@ -443,6 +559,39 @@ int ACC::initializeForDataReadout(const YAML::Node& config, const string& timest
             t1 = std::chrono::high_resolution_clock::now();
         }
 
+        //final PLL/FLL/DLL checks
+        for(ACDC& acdc : acdcs)
+	{
+            // read ACDC info frame 
+            eth.send(0x100, 0x00D00000 | (1 << (acdc.getBoardIndex() + 24)));
+
+            //wait until we have fully received all 32 expected words from the ACDC
+            int iTimeout = 10;
+            while(eth.recieve(0x1138+acdc.getBoardIndex()) < 32 && iTimeout > 0)
+            {
+                usleep(10);
+                --iTimeout;
+            }
+            if(iTimeout == 0) 
+            {
+                std::cout << "ERROR: ACDC info frame retrieval timeout" << std::endl;
+                exit(1);
+            }
+
+            std::vector<uint64_t> acdcInfo = eth.recieve_many(0x1200 + acdc.getBoardIndex(), 32, EthernetInterface::NO_ADDR_INC);
+            if((acdcInfo[0] & 0xffff) != 0x1234)
+            {
+                std::cout << "ACDC" << acdc.getBoardIndex() << " has invalid info frame" << std::endl;
+            }
+
+            if(!(acdcInfo[6] & 0x4))   writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked ACC pll");
+            if(!(acdcInfo[6] & 0x2))   writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked serial pll");
+            if(!(acdcInfo[6] & 0x1))   writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked white rabbit pll");
+            if(!(acdcInfo[6] & 0x200)) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked JC pll");
+            if(!(acdcInfo[6] & 0x8))   writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked sys pll");
+            if((acdcInfo[6] & 0x1f0) != 0x1f0) writeErrorLog("ACDC" + std::to_string(acdc.getBoardIndex()) + " has unlocked ramp feedback");
+        }
+
 	//Enables the transfer of data from ACDC to ACC
 	eth_burst.setBurstTarget();
 	eth.setBurstMode(true);
@@ -490,6 +639,26 @@ void ACC::setHardwareTrigSrc(int src, unsigned int boardMask)
             ACDCtrigMode = 1;
             break;
         case 4:
+            ACCtrigMode = 2;
+            ACDCtrigMode = 3;
+            break;
+        case 5:
+            ACCtrigMode = 3;
+            ACDCtrigMode = 3;
+            break;
+        case 6:
+            ACCtrigMode = 4;
+            ACDCtrigMode = 3;
+            break;
+        case 7:
+            ACCtrigMode = 5;
+            ACDCtrigMode = 3;
+            break;
+        case 8:
+            ACCtrigMode = 4;
+            ACDCtrigMode = 3;
+            break;
+        case 9:
             ACCtrigMode = 5;
             ACDCtrigMode = 3;
             break;
@@ -570,7 +739,7 @@ void ACC::writeThread()
         }
         else
         {
-            std::cout << "Header error: " << acdc_data[0] << "\t" << consequentErrors << "\n";
+            std::cout << "Header error: " << std::hex << acdc_data[0] << "\t" << std::dec << consequentErrors << "\n";
             //versionCheck(true);
             int i = 0;
             int i_Stop = 99999999;
@@ -684,9 +853,9 @@ void ACC::endRun()
 {
     data_write_thread_->join();
     setHardwareTrigSrc(0, params_.boardMask);
+    usleep(1000);
     enableTransfer(0);
     eth.send(0x23, 0);
-    usleep(100);
     eth.setBurstMode(false);
 }
 
@@ -762,8 +931,21 @@ void ACC::versionCheck(bool debug)
 	if(debug)
 	{
 	    auto eAccBuffer = eth.recieve_many(0x1100, 64+32);
+            auto AccBuffer_sfp = eth.recieve_many(0x200, 32);
 
 	    printf("  PLL lock status:\n    System PLL: %d\n    Serial PLL: %d\n    DPA PLL 1:  %d\n    DPA PLL 2:  %d\n", (AccBuffer[2] & 0x1)?1:0, (AccBuffer[2] & 0x2)?1:0, (AccBuffer[2] & 0x4)?1:0, (AccBuffer[2] & 0x8)?1:0);
+
+            printf("  %-30s %10s %10s\n",  "", "SFP0", "SFP1");
+            printf("  %-30s %10d %10d\n", "TX PLL lock",   (AccBuffer_sfp[0x8] & 0x1)?1:0, (AccBuffer_sfp[0x18] & 0x1)?1:0);
+            printf("  %-30s %10d %10d\n", "TX fault",      (AccBuffer_sfp[0x8] & 0x2)?1:0, (AccBuffer_sfp[0x18] & 0x2)?1:0);
+            printf("  %-30s %10d %10d\n", "RX LOS",        (AccBuffer_sfp[0x8] & 0x4)?1:0, (AccBuffer_sfp[0x18] & 0x4)?1:0);
+            printf("  %-30s %10d %10d\n", "MOD ABS",       (AccBuffer_sfp[0x8] & 0x8)?1:0, (AccBuffer_sfp[0x18] & 0x8)?1:0);
+            printf("  %-30s %10d %10d\n", "TX ready",      (AccBuffer_sfp[0x9] & 0x2)?1:0, (AccBuffer_sfp[0x19] & 0x2)?1:0);
+            printf("  %-30s %10d %10d\n", "RX ready",      (AccBuffer_sfp[0x9] & 0x1)?1:0, (AccBuffer_sfp[0x19] & 0x1)?1:0);
+	    printf("  %-30s %10lu %10lu\n", "latency",        AccBuffer_sfp[0xb],             AccBuffer_sfp[0x1b]);
+            printf("  %-30s %10lu %10lu\n", "Symbol errors",  AccBuffer_sfp[0xd],             AccBuffer_sfp[0x1d]);
+	    printf("  %-30s %10lu %10lu\n", "Parity errors",  AccBuffer_sfp[0xc],             AccBuffer_sfp[0x1c]);
+            printf("\n");
 	    printf("  %-30s %10s %10s %10s %10s %10s %10s %10s %10s\n", "", "ACDC0", "ACDC1", "ACDC2", "ACDC3", "ACDC4", "ACDC5", "ACDC6", "ACDC7");
 	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link rx clk fail", (AccBuffer[16] & 0x1)?1:0, (AccBuffer[16] & 0x2)?1:0, (AccBuffer[16] & 0x4)?1:0, (AccBuffer[16] & 0x8)?1:0, (AccBuffer[16] & 0x10)?1:0, (AccBuffer[16] & 0x20)?1:0, (AccBuffer[16] & 0x40)?1:0, (AccBuffer[16] & 0x80)?1:0);
 	    printf("  %-30s %10d %10d %10d %10d %10d %10d %10d %10d\n", "40 MPBS link align err", (AccBuffer[17] & 0x1)?1:0, (AccBuffer[17] & 0x2)?1:0, (AccBuffer[17] & 0x4)?1:0, (AccBuffer[17] & 0x8)?1:0, (AccBuffer[17] & 0x10)?1:0, (AccBuffer[17] & 0x20)?1:0, (AccBuffer[17] & 0x40)?1:0, (AccBuffer[17] & 0x80)?1:0);

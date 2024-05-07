@@ -124,6 +124,36 @@ void EthernetInterface::send(uint64_t addr, const std::vector<uint64_t>& values)
     }
 }
 
+void EthernetInterface::flush()
+{
+    int numbytes;
+    int retval;
+
+    struct sockaddr_storage their_addr;
+    socklen_t addr_len = sizeof(their_addr);
+
+    // read response ///////////////////////////////////////////////////////////
+    tv_ = {0, 150};  // 0 seconds and 150 useconds
+
+    do
+    {
+        std::cout << "I AM HERE" << std::endl;
+        retval = select(sockfd_+1, &rfds_, NULL, NULL, &tv_);
+        std::cout << "I AM THERE: " << retval << "\t" << (retval > 0) << std::endl;
+        if(retval > 0)
+        {
+            numbytes = recvfrom(sockfd_,
+                                buff_,
+                                MAXBUFLEN_ - 1,
+                                0,
+                                (struct sockaddr*)&their_addr,
+                                &addr_len);
+        }
+    } while(retval > 0 && numbytes > 0);
+    std::cout << "I AM DONE" << std::endl;
+}
+
+
 uint64_t EthernetInterface::recieve(uint64_t addr, uint8_t flags)
 {
     int numbytes;

@@ -1,27 +1,66 @@
 basicConfig:
   DAQSettings:
-    ip : 192.168.46.108
-    fileLabel : testData
+    ip : 192.168.46.110
+    fileLabel : test
     resetACCOnStart : false
     resetACDCOnStart : false
-    triggerMode : 1
+    triggerMode : 2
     ACDCMask : 0xff
     calibMode : false
     humanReadableData : false
     nevents : 1000
-    pedestals : 0xb00
-    selfTrigThresholds : 0x900
+    pedestals : 0xa00
+    selfTrigThresholds : 0xa00
     selfTrigMask: [0x1f, 0x3f, 0x3f, 0x3f, 0x3f]
-    dll_vdd: 0x100
+    #selfTrigMask: [0x00, 0x00, 0x00, 0x0, 0x20]
+    dll_vdd: 0x400
     accBackpressure: true
     coincidentTrigMask: 0x3
     coincidentTrigDelay_0: 0
     coincidentTrigDelay_1: 0
+    coincidentTrigDelay_2: 0
+    coincidentTrigDelay_3: 0
+    coincidentTrigDelay_4: 0
+    coincidentTrigDelay_5: 0
+    coincidentTrigDelay_6: 0
+    coincidentTrigDelay_7: 0
+    coincidentTrigStretch: 3
+    localDelay: 0
+    sfp0Delay: 0
+    sfo1Delay: 0
+    coincidentTrigMask_interstation: 0x4
+    coincidentTrigMask_ACDCs: 0x000f0f
+    tx_source_sfp0: 1
+    tx_source_sfp1: 0
+    remote_trig_mask: 0x1
+    sfp0_countLoopback: 0
+    sfp1_countLoopback: 1
 
-ACC1:
-  DAQSettings:
-    ip: 192.168.46.107
 
-ACC2:
-  DAQSettings:
-    ip: 192.168.46.108
+#ACC1:
+#  DAQSettings:
+#    ip: 192.168.46.109
+#    triggerMode: 8
+#    tx_source_sfp0: 1
+#    tx_source_sfp1: 1
+#    sfp0_countLoopback: 0
+#    sfp1_countLoopback: 1
+#    #ACDCMask : 0x03
+#    #selfTrigThresholds : 0x700
+#
+#ACC2:
+#  DAQSettings:
+#    ip: 192.168.46.110
+#    triggerMode: 9
+#    tx_source_sfp0: 0
+#    tx_source_sfp1: 0
+#    sfp0_countLoopback: 1
+#    sfp1_countLoopback: 1
+#
+#sequence:
+#  scan:
+#    DAQSettings:
+#      pedestals :
+#        start : 0x000
+#        stop  : 0xfff
+#        step  : 0x010
