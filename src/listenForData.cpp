@@ -173,12 +173,17 @@ int main(int argc, char *argv[])
                     }
                 }
             }
-//                else
-//                {
-//                    acc_cfg.push_back(merge_nodes(YAML::Clone(acc_base_cfg), cfg.second["DAQSettings"]));
-//                    if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
-//                    else                            acc_cfg.back()["fileLabel"] = cfg.first.as<std::string>();
-//                }
+            else
+            {
+                configs.push_back({});
+                auto& acc_cfg = configs.back();
+                for(const auto& acc_base_cfg : ACC_configs)
+                {
+                    acc_cfg.push_back(merge_nodes(YAML::Clone(acc_base_cfg), cfg.second["DAQSettings"]));
+                    if(acc_cfg.back()["fileLabel"]) acc_cfg.back()["fileLabel"] = acc_cfg.back()["fileLabel"].as<std::string>() + "_" + cfg.first.as<std::string>();
+                    else                            acc_cfg.back()["fileLabel"] = cfg.first.as<std::string>();
+                }
+            }
         }
     }
     else

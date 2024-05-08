@@ -131,7 +131,23 @@ public:
 
         int coincidentTrigMask;
         int coincidentTrigDelay[8];
-        int coincidentTrigStretch[8];
+        int coincidentTrigStretch;
+        int localDelay;
+        int sfp0Delay;
+        int sfp1Delay;
+        int coincidentTrigMask_interstation;
+        int tx_source_sfp0;
+        int tx_source_sfp1;
+        int remote_trig_mask;
+        int coincidentTrigMask_ACDCs;
+
+        bool sfp0_tx_disable;
+        bool sfp1_tx_disable;
+        int sfp0_speed;
+        int sfp1_speed;
+        bool sfp0_countLoopback;
+        bool sfp1_countLoopback;
+
     } params_;
 
 private:
